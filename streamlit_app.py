@@ -4,9 +4,10 @@ from openai import OpenAI
 # Show title and description.
 st.title("💬 Chatbot")
 st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
+    "응애가 만든 기본 템플릿입니다. gpt-3.5-turbo를 기준으로 생성하네요 "
     "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
     "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
+    "영어영어 쏼라쏼라"
 )
 
 # Ask user for their OpenAI API key via `st.text_input`.
