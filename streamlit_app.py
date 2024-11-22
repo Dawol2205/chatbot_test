@@ -18,6 +18,8 @@ st.write(f"평균값: {mean_value}")
 st.write(f"중앙값: {median_value}")
 st.write(f"표준편차: {stdev_value}")
 
+---
+
 # Show title and description.
 st.title("💬 Chatbot")
 st.write(
