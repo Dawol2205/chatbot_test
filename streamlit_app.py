@@ -126,21 +126,22 @@ def main():
         text_chunks = get_text_chunks(files_text)
         vetorestore = get_vectorstore(text_chunks)
 
-        try:
-            st.session_state.conversation = get_conversation_chain(vetorestore, openai_api_key) 
-            st.session_state.processComplete = True
-        except Exception as e:
-            logger.error(f"Failed to process files: {e}")
+# chat input
+query = st.chat_input("질문을 입력해주세요.")
 
+try:
+    # conversation history
     if 'messages' not in st.session_state:
         st.session_state['messages'] = [{"role": "assistant", 
                                         "content": "안녕하세요! 주어진 문서에 대해 궁금하신 것이 있으면 언제든 물어봐주세요!"}]
 
+    # conversation logic
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    history = StreamlitChatMessageHistory(key="chat_messages")
+    # query processing
+    history = None  # conversation history를 사용하지 않음
 
     if query := st.chat_input("질문을 입력해주세요."):
         try:
@@ -168,6 +169,7 @@ def main():
             st.session_state.messages.append({"role": "assistant", "content": response})
         except Exception as e:
             logger.error(f"Failed to process query: {e}")
+
 
 if __name__ == '__main__':
     main()
