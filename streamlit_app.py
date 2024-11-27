@@ -1,95 +1,156 @@
 import streamlit as st
-from openai import OpenAI
-import re
+import tiktoken
+from loguru import logger
 
-# ---------------------------------------------------------------------------------------
-# Set page config
-st.set_page_config(page_title="🥘 한식 레시피 도우미", page_icon="🥘")
+from langchain.chains import ConversationalRetrievalChain
+from langchain.chat_models import ChatOpenAI
 
-# Show title and description
-st.title("🥘 한식 레시피 도우미")
-st.write(
-    "한식 레시피를 AI와 함께 알아보세요! 요리 방법, 재료, 팁 등을 물어보실 수 있습니다. "
-    "음식 이름을 말씀해 주시면 상세한 레시피를 알려드립니다."
-)
+from langchain.document_loaders import PyPDFLoader
+from langchain.document_loaders import Docx2txtLoader
+from langchain.document_loaders import UnstructuredPowerPointLoader
 
-# System message to guide the AI's behavior
-SYSTEM_MESSAGE = """당신은 한식 전문 요리 선생님입니다. 네이버 백과사전의 한식 데이터를 기반으로 요리 방법을 알려주세요.
-답변할 때는 다음 형식을 따라주세요:
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.embeddings import HuggingFaceEmbeddings
 
-1. 요리 설명: 간단한 소개와 특징
-2. 필수 재료: bullet point로 재료 나열
-3. 선택 재료: bullet point로 선택적인 재료 나열
-4. 조리 순서: 번호를 매겨 순서대로 설명
-5. 조리 팁: 맛있게 만들기 위한 중요 포인트
+from langchain.memory import ConversationBufferMemory
+from langchain.vectorstores import FAISS
 
-답변은 친근하고 이해하기 쉬운 말투로 해주세요."""
+# from streamlit_chat import message
+from langchain.callbacks import get_openai_callback
+from langchain.memory import StreamlitChatMessageHistory
 
-# Initialize OpenAI client
-openai_api_key = st.text_input("OpenAI API Key를 입력해주세요", type="password")
-if not openai_api_key:
-    st.info("OpenAI API 키를 입력해주세요! API 키는 안전하게 보관됩니다.", icon="🔑")
-else:
-    client = OpenAI(api_key=openai_api_key)
+def main():
+    st.set_page_config(
+    page_title="DirChat",
+    page_icon=":books:")
 
-    # Initialize session state for messages
-    if "messages" not in st.session_state:
-        st.session_state.messages = [
-            {"role": "system", "content": SYSTEM_MESSAGE}
-        ]
+    st.title("_Private Data :red[QA Chat]_ :books:")
 
-    # Display chat history
-    for message in st.session_state.messages:
-        if message["role"] != "system":  # Don't show system messages
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
+    if "conversation" not in st.session_state:
+        st.session_state.conversation = None
 
-    # Chat input
-    if prompt := st.chat_input("어떤 요리를 배워볼까요? (예: 김치찌개 레시피 알려주세요)"):
-        # Add user message to chat history
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = None
 
-        # Generate response
-        with st.chat_message("assistant"):
-            message_placeholder = st.empty()
-            full_response = ""
-            
-            # Stream the response
-            stream = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": m["role"], "content": m["content"]}
-                    for m in st.session_state.messages
-                ],
-                stream=True,
-            )
-            
-            for chunk in stream:
-                if chunk.choices[0].delta.content is not None:
-                    full_response += chunk.choices[0].delta.content
-                    message_placeholder.markdown(full_response + "▌")
-            
-            message_placeholder.markdown(full_response)
-        
-        # Add assistant response to chat history
-        st.session_state.messages.append({"role": "assistant", "content": full_response})
+    if "processComplete" not in st.session_state:
+        st.session_state.processComplete = None
 
-    # Add sidebar with helpful tips
     with st.sidebar:
-        st.header("💡 사용 팁")
-        st.markdown("""
-        - 특정 요리의 레시피를 물어보세요
-        - 재료 대체 방법을 문의하세요
-        - 조리 팁을 요청해보세요
-        - 칼로리나 영양 정보도 물어볼 수 있어요
-        """)
-        
-        st.header("🎯 예시 질문")
-        st.markdown("""
-        - "김치찌개 레시피 알려주세요"
-        - "불고기 양념 비율이 궁금해요"
-        - "된장찌개에 들어가는 재료가 뭔가요?"
-        - "비빔밥 예쁘게 담는 방법 알려주세요"
-        """)
+        uploaded_files =  st.file_uploader("Upload your file",type=['pdf','docx'],accept_multiple_files=True)
+        openai_api_key = st.text_input("OpenAI API Key", key="chatbot_api_key", type="password")
+        process = st.button("Process")
+    if process:
+        if not openai_api_key:
+            st.info("Please add your OpenAI API key to continue.")
+            st.stop()
+        files_text = get_text(uploaded_files)
+        text_chunks = get_text_chunks(files_text)
+        vetorestore = get_vectorstore(text_chunks)
+     
+        st.session_state.conversation = get_conversation_chain(vetorestore,openai_api_key) 
+
+        st.session_state.processComplete = True
+
+    if 'messages' not in st.session_state:
+        st.session_state['messages'] = [{"role": "assistant", 
+                                        "content": "안녕하세요! 주어진 문서에 대해 궁금하신 것이 있으면 언제든 물어봐주세요!"}]
+
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    history = StreamlitChatMessageHistory(key="chat_messages")
+
+    # Chat logic
+    if query := st.chat_input("질문을 입력해주세요."):
+        st.session_state.messages.append({"role": "user", "content": query})
+
+        with st.chat_message("user"):
+            st.markdown(query)
+
+        with st.chat_message("assistant"):
+            chain = st.session_state.conversation
+
+            with st.spinner("Thinking..."):
+                result = chain({"question": query})
+                with get_openai_callback() as cb:
+                    st.session_state.chat_history = result['chat_history']
+                response = result['answer']
+                source_documents = result['source_documents']
+
+                st.markdown(response)
+                with st.expander("참고 문서 확인"):
+                    st.markdown(source_documents[0].metadata['source'], help = source_documents[0].page_content)
+                    st.markdown(source_documents[1].metadata['source'], help = source_documents[1].page_content)
+                    st.markdown(source_documents[2].metadata['source'], help = source_documents[2].page_content)
+                    
+
+
+# Add assistant message to chat history
+        st.session_state.messages.append({"role": "assistant", "content": response})
+
+def tiktoken_len(text):
+    tokenizer = tiktoken.get_encoding("cl100k_base")
+    tokens = tokenizer.encode(text)
+    return len(tokens)
+
+def get_text(docs):
+
+    doc_list = []
+    
+    for doc in docs:
+        file_name = doc.name  # doc 객체의 이름을 파일 이름으로 사용
+        with open(file_name, "wb") as file:  # 파일을 doc.name으로 저장
+            file.write(doc.getvalue())
+            logger.info(f"Uploaded {file_name}")
+        if '.pdf' in doc.name:
+            loader = PyPDFLoader(file_name)
+            documents = loader.load_and_split()
+        elif '.docx' in doc.name:
+            loader = Docx2txtLoader(file_name)
+            documents = loader.load_and_split()
+        elif '.pptx' in doc.name:
+            loader = UnstructuredPowerPointLoader(file_name)
+            documents = loader.load_and_split()
+
+        doc_list.extend(documents)
+    return doc_list
+
+
+def get_text_chunks(text):
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=900,
+        chunk_overlap=100,
+        length_function=tiktoken_len
+    )
+    chunks = text_splitter.split_documents(text)
+    return chunks
+
+
+def get_vectorstore(text_chunks):
+    embeddings = HuggingFaceEmbeddings(
+                                        model_name="jhgan/ko-sroberta-multitask",
+                                        model_kwargs={'device': 'cpu'},
+                                        encode_kwargs={'normalize_embeddings': True}
+                                        )  
+    vectordb = FAISS.from_documents(text_chunks, embeddings)
+    return vectordb
+
+def get_conversation_chain(vetorestore,openai_api_key):
+    llm = ChatOpenAI(openai_api_key=openai_api_key, model_name = 'gpt-3.5-turbo',temperature=0)
+    conversation_chain = ConversationalRetrievalChain.from_llm(
+            llm=llm, 
+            chain_type="stuff", 
+            retriever=vetorestore.as_retriever(search_type = 'mmr', vervose = True), 
+            memory=ConversationBufferMemory(memory_key='chat_history', return_messages=True, output_key='answer'),
+            get_chat_history=lambda h: h,
+            return_source_documents=True,
+            verbose = True
+        )
+
+    return conversation_chain
+
+
+
+if __name__ == '__main__':
+    main()
