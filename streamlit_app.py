@@ -23,12 +23,14 @@ def get_text(docs):
 
     for file in docs:
         file_name = file.name
+        # Streamlit UploadedFile 객체 처리
         if file_name.endswith(".pdf"):
-            loader = PyPDFLoader(file)
+            # PyPDFLoader는 파일 경로를 기대하므로 메모리 객체에서 읽도록 수정
+            loader = PyPDFLoader(file_path=file)
         elif file_name.endswith(".docx"):
-            loader = Docx2txtLoader(file)
+            loader = Docx2txtLoader(file_obj=file)
         elif file_name.endswith(".pptx"):
-            loader = UnstructuredPowerPointLoader(file)
+            loader = UnstructuredPowerPointLoader(file=file)
         else:
             raise ValueError(f"지원되지 않는 파일 형식: {file_name}")
 
@@ -40,6 +42,7 @@ def get_text(docs):
             all_texts.append(doc.page_content)
 
     return all_texts
+
 
 
 # 텍스트를 작은 조각으로 분할하는 함수
