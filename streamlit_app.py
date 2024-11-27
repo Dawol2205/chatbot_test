@@ -51,12 +51,21 @@ def main():
     with st.sidebar:
         # 파일 업로드 & API 키 입력
         uploaded_files = st.file_uploader(
-            "파일 업로드", 
-            type=['pdf', 'docx', 'pptx', 'json'],
-            accept_multiple_files=True,
-            max_files=5,
-            max_file_size=10
-        )
+    "파일 업로드", 
+    type=['pdf', 'docx', 'pptx', 'json'],
+    accept_multiple_files=True
+)
+
+# 파일 수와 크기를 직접 제한
+if uploaded_files:
+    if len(uploaded_files) > 5:
+        st.warning("최대 5개의 파일만 업로드할 수 있습니다.")
+        uploaded_files = uploaded_files[:5]
+    
+    for file in uploaded_files:
+        if file.size > 10 * 1024 * 1024:  # 10MB
+            st.warning(f"{file.name}은 10MB를 초과합니다. 건너뜁니다.")
+            uploaded_files.remove(file)
         
         st.sidebar.info("""
         📚 DirChat 사용 가이드
