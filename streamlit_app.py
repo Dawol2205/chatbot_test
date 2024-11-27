@@ -1,102 +1,33 @@
-import secrets
-from langchain.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredPowerPointLoader
-from langchain.chat_models import ChatOpenAI
+import os
+import json
+import logging
+import streamlit as st
+import tiktoken
+from loguru import logger
+
 from langchain.chains import ConversationalRetrievalChain
+from langchain.chat_models import ChatOpenAI
+from langchain.docstore.document import Document
+
+from langchain.document_loaders import PyPDFLoader
+from langchain.document_loaders import Docx2txtLoader
+from langchain.document_loaders import UnstructuredPowerPointLoader
+
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import HuggingFaceEmbeddings
+
 from langchain.memory import ConversationBufferMemory
 from langchain.vectorstores import FAISS
 
-import streamlit as st
-from loguru import logger
+from langchain.callbacks import get_openai_callback
+from langchain.memory import StreamlitChatMessageHistory
 
-def get_openai_callback():
-    return {"api_key": secrets.token_urlsafe(16)}  # get_openai_callback() 메서드에 api_key을 추가
-
-
-# 파일 처리 최적화
-def get_text(docs):
-    try:
-        doc_list = []
-        
-        for doc in docs:
-            file_name = doc.name  # doc 객체의 이름을 파일 이름으로 사용
-            
-            with open(file_name, "wb") as file:  # 파일을 doc.name으로 저장
-                file.write(doc.getvalue())
-                logger.info(f"Uploaded {file_name}")
-            
-            loader = None
-            if '.pdf' in doc.name:
-                loader = PyPDFLoader(file_name)
-            elif '.docx' in doc.name:
-                loader = Docx2txtLoader(file_name)
-            elif '.pptx' in doc.name:
-                loader = UnstructuredPowerPointLoader(file_name)
-
-            try:
-                documents = loader.load_and_split()
-            except Exception as e:
-                logger.error(f"Failed to process file {file_name}: {e}")
-            
-            doc_list.extend(documents)
-        return doc_list
-    except Exception as e:
-        logger.error(f"Failed to read files: {e}")
-        return None
-
-
-# 텍스트 쪼기 최적화
-def get_text_chunks(text):
-    try:
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=900,
-            chunk_overlap=100,
-            length_function=None  # tiktoken_len() 사용하지 않음
-        )
-        chunks = text_splitter.split_documents(text)
-        return chunks
-    except Exception as e:
-        logger.error(f"Failed to split documents: {e}")
-        return None
-
-
-# 벡터 스토어 최적화
-def get_vectorstore(text_chunks):
-    try:
-        embeddings = HuggingFaceEmbeddings(
-            model_name="jhgan/ko-sroberta-multitask",
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
-        )  
-        
-        vectordb = FAISS.from_documents(text_chunks, embeddings)
-        return vectordb
-    except Exception as e:
-        logger.error(f"Failed to create vector store: {e}")
-        return None
-
-
-# 대화 chain 최적화
-def get_conversation_chain(vetorestore, openai_api_key):
-    try:
-        llm = ChatOpenAI(openai_api_key=openai_api_key, model_name="gpt-3.5-turbo", temperature=0)
-        
-        conversation_chain = ConversationalRetrievalChain.from_llm(
-            llm=llm, 
-            chain_type="stuff", 
-            retriever=vetorestore.as_retriever(search_type='mmr', vervose=True), 
-            memory=ConversationBufferMemory(memory_key='chat_history', return_messages=True, output_key='answer'),
-            get_chat_history=lambda h: h,
-            return_source_documents=True,
-            verbose = True
-        )
-        
-        return conversation_chain
-    except Exception as e:
-        logger.error(f"Failed to create conversation chain: {e}")
-        return None
-
+# 로깅 설정
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    filename='dirchat.log'
+)
 
 def main():
     st.set_page_config(
@@ -106,62 +37,196 @@ def main():
 
     st.title("_Private Data :red[QA Chat]_ :books:")
 
-    if "conversation" not in st.session_state:
-        st.session_state.conversation = None
-
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = None
-
-    if "processComplete" not in st.session_state:
-        st.session_state.processComplete = None
+    # 세션 상태 초기화
+    session_keys = [
+        "conversation", 
+        "chat_history", 
+        "processComplete", 
+        "messages"
+    ]
+    for key in session_keys:
+        if key not in st.session_state:
+            st.session_state[key] = None
 
     with st.sidebar:
-        uploaded_files =  st.file_uploader("Upload your file", type=['pdf', 'docx'], accept_multiple_files=True)
-        openai_api_key = st.text_input("OpenAI API Key", key="chatbot_api_key", type="password")
+        # 파일 업로드 & API 키 입력
+        uploaded_files = st.file_uploader(
+            "파일 업로드", 
+            type=['pdf', 'docx', 'pptx', 'json'],
+            accept_multiple_files=True,
+            max_files=5,
+            max_file_size=10
+        )
         
-        process = st.button("Process")
+        st.sidebar.info("""
+        📚 DirChat 사용 가이드
+        - PDF, DOCX, PPTX, JSON 파일 지원
+        - 최대 5개 파일 업로드 가능
+        - 각 파일 10MB 제한
+        """)
+
+        openai_api_key = st.text_input("OpenAI API Key", type="password")
+        process = st.button("문서 처리")
 
     if process:
+        if not openai_api_key:
+            st.info("OpenAI API 키를 입력해주세요.")
+            st.stop()
+
+        # 문서 처리
         files_text = get_text(uploaded_files)
         text_chunks = get_text_chunks(files_text)
-        vectordb = get_vectorstore(text_chunks)
-        conversation_chain = get_conversation_chain(vectordb, openai_api_key)
+        vector_store = get_vectorstore(text_chunks)
+     
+        st.session_state.conversation = get_conversation_chain(vector_store, openai_api_key)
+        st.session_state.processComplete = True
 
-        try:
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
-            
-            history = None  # conversation history를 사용하지 않음
+    # 초기 메시지 설정
+    if 'messages' not in st.session_state:
+        st.session_state['messages'] = [
+            {"role": "assistant", 
+             "content": "안녕하세요! 업로드된 문서에 대해 질문해주세요."}
+        ]
 
-            if uploaded_files and openai_api_key:
-                query = st.chat_input("질문을 입력해주세요.")
+    # 메시지 히스토리 표시
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    history = StreamlitChatMessageHistory(key="chat_messages")
+
+    # 채팅 입력 처리
+    if query := st.chat_input("질문을 입력해주세요."):
+        st.session_state.messages.append({"role": "user", "content": query})
+
+        with st.chat_message("user"):
+            st.markdown(query)
+
+        with st.chat_message("assistant"):
+            chain = st.session_state.conversation
+
+            with st.spinner("답변 생성 중..."):
+                result = chain({"question": query})
+                with get_openai_callback() as cb:
+                    st.session_state.chat_history = result['chat_history']
                 
-                try:
-                    st.session_state.messages.append({"role": "user", "content": query})
+                response = result['answer']
+                source_documents = result['source_documents']
+
+                st.markdown(response)
+                
+                # 참고 문서 확장 섹션
+                with st.expander("참고 문서 확인"):
+                    for doc in source_documents[:3]:
+                        st.markdown(doc.metadata['source'], help=doc.page_content)
+
+        st.session_state.messages.append({"role": "assistant", "content": response})
+
+def tiktoken_len(text):
+    tokenizer = tiktoken.get_encoding("cl100k_base")
+    tokens = tokenizer.encode(text)
+    return len(tokens)
+
+def get_text(docs):
+    doc_list = []
+    supported_extensions = ['.pdf', '.docx', '.pptx', '.json']
+    
+    for doc in docs:
+        file_extension = os.path.splitext(doc.name)[1].lower()
+        if file_extension not in supported_extensions:
+            st.warning(f"지원되지 않는 파일 형식: {doc.name}")
+            continue
+        
+        try:
+            with open(doc.name, "wb") as file:
+                file.write(doc.getvalue())
+                logger.info(f"파일 업로드: {doc.name}")
+            
+            if file_extension == '.pdf':
+                loader = PyPDFLoader(doc.name)
+                documents = loader.load_and_split()
+            elif file_extension == '.docx':
+                loader = Docx2txtLoader(doc.name)
+                documents = loader.load_and_split()
+            elif file_extension == '.pptx':
+                loader = UnstructuredPowerPointLoader(doc.name)
+                documents = loader.load_and_split()
+            elif file_extension == '.json':
+                with open(doc.name, 'r', encoding='utf-8') as f:
+                    json_data = json.load(f)
                     
-                    with st.chat_message("user"):
-                        st.markdown(query)
-                        
-                    with st.chat_message("assistant"):
-                        result = conversation_chain({"question": query})
-                        with get_openai_callback() as cb:
-                            st.session_state.chat_history = result['chat_history']
-                        response = result['answer']
-                        source_documents = result['source_documents']
-
-                        st.markdown(response)
-                        with st.expander("참고 문서 확인"):
-                            st.markdown(source_documents[0].metadata['source'], help=source_documents[0].page_content)
-                            st.markdown(source_documents[1].metadata['source'], help=source_documents[1].page_content)
-                            st.markdown(source_documents[2].metadata['source'], help=source_documents[2].page_content)
-
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-                except Exception as e:
-                    logger.error(f"Failed to process query: {e}")
+                    documents = []
+                    if isinstance(json_data, list):
+                        for item in json_data:
+                            doc = Document(
+                                page_content=str(item),
+                                metadata={'source': doc.name}
+                            )
+                            documents.append(doc)
+                    elif isinstance(json_data, dict):
+                        doc = Document(
+                            page_content=json.dumps(json_data, ensure_ascii=False),
+                            metadata={'source': doc.name}
+                        )
+                        documents.append(doc)
+            
+            doc_list.extend(documents)
         except Exception as e:
-            logger.error(f"Failed to initialize application: {e}")
+            st.error(f"파일 처리 중 오류: {doc.name}, {e}")
+    
+    return doc_list
 
+def get_text_chunks(text):
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=900,
+        chunk_overlap=100,
+        length_function=tiktoken_len
+    )
+    chunks = text_splitter.split_documents(text)
+    return chunks
+
+def get_vectorstore(text_chunks):
+    embeddings = HuggingFaceEmbeddings(
+        model_name="jhgan/ko-sroberta-multitask",
+        model_kwargs={'device': 'cpu'},
+        encode_kwargs={'normalize_embeddings': True}
+    )
+    
+    vectordb = FAISS.from_documents(text_chunks, embeddings)
+    vectordb.save_local("faiss_index")  # 선택적: 인덱스 로컬 저장
+    
+    return vectordb
+
+def get_conversation_chain(vetorestore, openai_api_key):
+    try:
+        llm = ChatOpenAI(
+            openai_api_key=openai_api_key, 
+            model_name='gpt-3.5-turbo',
+            temperature=0,
+            max_tokens=1000
+        )
+        
+        conversation_chain = ConversationalRetrievalChain.from_llm(
+            llm=llm, 
+            chain_type="stuff", 
+            retriever=vetorestore.as_retriever(
+                search_type='mmr', 
+                search_kwargs={'k': 3}
+            ), 
+            memory=ConversationBufferMemory(
+                memory_key='chat_history', 
+                return_messages=True, 
+                output_key='answer'
+            ),
+            get_chat_history=lambda h: h,
+            return_source_documents=True,
+            verbose=True
+        )
+        
+        return conversation_chain
+    except Exception as e:
+        st.error(f"대화 체인 생성 중 오류: {e}")
+        return None
 
 if __name__ == '__main__':
     main()
