@@ -48,29 +48,30 @@ def main():
         if key not in st.session_state:
             st.session_state[key] = None
 
-    with st.sidebar:
-        # 파일 업로드
-        uploaded_files = st.file_uploader(
-            "파일 업로드", 
-            type=['pdf', 'docx', 'pptx', 'json'],
-            accept_multiple_files=True
-        )
+with st.sidebar:
+    uploaded_files = st.file_uploader(
+        "파일 업로드", 
+        type=['pdf', 'docx', 'pptx', 'json'],
+        accept_multiple_files=True
+    )
 
-        # 파일 수와 크기 제한
-        if uploaded_files:
-            if len(uploaded_files) > 5:
-                st.warning("최대 5개의 파일만 업로드할 수 있습니다.")
-                uploaded_files = uploaded_files[:5]
-            
-            # 10MB 파일 크기 제한
-            filtered_files = []
-            for file in uploaded_files:
-                if file.size <= 10 * 1024 * 1024:  # 10MB
-                    filtered_files.append(file)
-                else:
-                    st.warning(f"{file.name}은 10MB를 초과합니다. 건너뜁니다.")
-            
-            uploaded_files = filtered_files
+    if not uploaded_files:  # 파일이 업로드되지 않은 경우
+        uploaded_files = []  # 빈 리스트로 초기화
+
+    if len(uploaded_files) > 5:
+        st.warning("최대 5개의 파일만 업로드할 수 있습니다.")
+        uploaded_files = uploaded_files[:5]
+
+    # 10MB 크기 제한 필터링
+    filtered_files = []
+    for file in uploaded_files:
+        if file.size <= 10 * 1024 * 1024:
+            filtered_files.append(file)
+        else:
+            st.warning(f"{file.name}은 10MB를 초과합니다. 건너뜁니다.")
+
+    uploaded_files = filtered_files  # 유효 파일만 유지
+
         
         st.sidebar.info("""
         📚 DirChat 사용 가이드
