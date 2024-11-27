@@ -13,10 +13,6 @@ from loguru import logger
 def get_openai_callback():
     return {"api_key": secrets.token_urlsafe(16)}  # get_openai_callback() 메서드에 api_key을 추가
 
-def tiktoken_len(text):
-    tokenizer = tiktoken.get_encoding("cl100k_base")
-    tokens = tokenizer.encode(text)
-    return len(tokens)
 
 # 파일 처리 최적화
 def get_text(docs):
@@ -49,19 +45,21 @@ def get_text(docs):
         logger.error(f"Failed to read files: {e}")
         return None
 
+
 # 텍스트 쪼기 최적화
 def get_text_chunks(text):
     try:
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=900,
             chunk_overlap=100,
-            length_function=tiktoken_len
+            length_function=None  # tiktoken_len() 사용하지 않음
         )
         chunks = text_splitter.split_documents(text)
         return chunks
     except Exception as e:
         logger.error(f"Failed to split documents: {e}")
         return None
+
 
 # 벡터 스토어 최적화
 def get_vectorstore(text_chunks):
@@ -77,6 +75,7 @@ def get_vectorstore(text_chunks):
     except Exception as e:
         logger.error(f"Failed to create vector store: {e}")
         return None
+
 
 # 대화 chain 최적화
 def get_conversation_chain(vetorestore, openai_api_key):
@@ -97,6 +96,7 @@ def get_conversation_chain(vetorestore, openai_api_key):
     except Exception as e:
         logger.error(f"Failed to create conversation chain: {e}")
         return None
+
 
 def main():
     st.set_page_config(
@@ -124,51 +124,43 @@ def main():
     if process:
         files_text = get_text(uploaded_files)
         text_chunks = get_text_chunks(files_text)
-        vetorestore = get_vectorstore(text_chunks)
+        vectordb = get_vectorstore(text_chunks)
+        conversation_chain = get_conversation_chain(vectordb, openai_api_key)
 
-# chat input
-query = st.chat_input("질문을 입력해주세요.")
-
-try:
-    # conversation history
-    if 'messages' not in st.session_state:
-        st.session_state['messages'] = [{"role": "assistant", 
-                                        "content": "안녕하세요! 주어진 문서에 대해 궁금하신 것이 있으면 언제든 물어봐주세요!"}]
-
-    # conversation logic
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    # query processing
-    history = None  # conversation history를 사용하지 않음
-
-    if query := st.chat_input("질문을 입력해주세요."):
         try:
-            st.session_state.messages.append({"role": "user", "content": query})
+            for message in st.session_state.messages:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
             
-            with st.chat_message("user"):
-                st.markdown(query)
+            history = None  # conversation history를 사용하지 않음
+
+            if uploaded_files and openai_api_key:
+                query = st.chat_input("질문을 입력해주세요.")
                 
-            with st.chat_message("assistant"):
-                chain = st.session_state.conversation
+                try:
+                    st.session_state.messages.append({"role": "user", "content": query})
+                    
+                    with st.chat_message("user"):
+                        st.markdown(query)
+                        
+                    with st.chat_message("assistant"):
+                        result = conversation_chain({"question": query})
+                        with get_openai_callback() as cb:
+                            st.session_state.chat_history = result['chat_history']
+                        response = result['answer']
+                        source_documents = result['source_documents']
 
-                with st.spinner("Thinking..."):
-                    result = chain({"question": query})
-                    with get_openai_callback() as cb:
-                        st.session_state.chat_history = result['chat_history']
-                    response = result['answer']
-                    source_documents = result['source_documents']
+                        st.markdown(response)
+                        with st.expander("참고 문서 확인"):
+                            st.markdown(source_documents[0].metadata['source'], help=source_documents[0].page_content)
+                            st.markdown(source_documents[1].metadata['source'], help=source_documents[1].page_content)
+                            st.markdown(source_documents[2].metadata['source'], help=source_documents[2].page_content)
 
-                    st.markdown(response)
-                    with st.expander("참고 문서 확인"):
-                        st.markdown(source_documents[0].metadata['source'], help=source_documents[0].page_content)
-                        st.markdown(source_documents[1].metadata['source'], help=source_documents[1].page_content)
-                        st.markdown(source_documents[2].metadata['source'], help=source_documents[2].page_content)
-
-            st.session_state.messages.append({"role": "assistant", "content": response})
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+                except Exception as e:
+                    logger.error(f"Failed to process query: {e}")
         except Exception as e:
-            logger.error(f"Failed to process query: {e}")
+            logger.error(f"Failed to initialize application: {e}")
 
 
 if __name__ == '__main__':
