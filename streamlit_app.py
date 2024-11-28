@@ -1,5 +1,6 @@
 import streamlit as st
 import tiktoken
+import json
 from loguru import logger
 from concurrent import futures
 
@@ -11,6 +12,8 @@ from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.memory import ConversationBufferMemory
 from langchain.vectorstores import FAISS
 from langchain.callbacks import get_openai_callback
+from langchain.document_loaders import TextLoader
+from langchain.docstore.document import Document
 
 def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
@@ -43,7 +46,7 @@ def main():
         # 문서 업로드 기능
         uploaded_files = st.file_uploader(
             "요리 관련 문서 업로드", 
-            type=["pdf", "docx", "pptx"],
+            type=["pdf", "docx", "pptx", "json"],
             accept_multiple_files=True
         )
         
@@ -144,6 +147,24 @@ def main():
                     })
                     logger.error(f"응답 생성 오류: {e}")
 
+def process_json(file_path):
+    """JSON 파일을 처리하는 함수"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            data = json.load(file)
+        
+        # JSON 데이터를 문자열로 변환
+        text_content = json.dumps(data, ensure_ascii=False, indent=2)
+        
+        # Document 객체 생성
+        return [Document(
+            page_content=text_content,
+            metadata={"source": file_path}
+        )]
+    except Exception as e:
+        logger.error(f"JSON 파일 처리 중 오류 발생: {e}")
+        return []
+
 def tiktoken_len(text):
     """텍스트의 토큰 길이 계산 함수"""
     tokenizer = tiktoken.get_encoding("cl100k_base")
@@ -172,6 +193,8 @@ def get_text(docs):
             elif '.pptx' in doc.name.lower():
                 loader = UnstructuredPowerPointLoader(file_name)
                 documents = loader.load_and_split()
+            elif '.json' in doc.name.lower():
+                documents = process_json(file_name)
             else:
                 continue
 
