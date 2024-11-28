@@ -1,124 +1,218 @@
 import streamlit as st
+import tiktoken
+from loguru import logger
+from concurrent import futures
+
+from langchain.chains import ConversationalRetrievalChain
+from langchain.chat_models import ChatOpenAI
 from langchain.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredPowerPointLoader
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import FAISS
-from langchain.chains.question_answering import load_qa_chain
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.schema import Document
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.memory import ConversationBufferMemory
+from langchain.vectorstores import FAISS
 from langchain.callbacks import get_openai_callback
 
+def validate_api_key(api_key):
+    """OpenAI API 키 형식 검증"""
+    return api_key and len(api_key) > 20
 
-# 텍스트 길이 측정을 위한 함수
-def tiktoken_len(text):
-    return len(text)
-
-
-# 파일에서 텍스트를 추출하는 함수
-def get_text(docs):
-    """파일에서 텍스트를 읽어오는 함수"""
-    all_texts = []
-
-    if not docs:
-        raise ValueError("파일이 업로드되지 않았습니다.")
-
-    for file in docs:
-        file_name = file.name
-        # Streamlit UploadedFile 객체 처리
-        if file_name.endswith(".pdf"):
-            # PyPDFLoader는 파일 경로를 기대하므로 메모리 객체에서 읽도록 수정
-            loader = PyPDFLoader(file_path=file)
-        elif file_name.endswith(".docx"):
-            loader = Docx2txtLoader(file_obj=file)
-        elif file_name.endswith(".pptx"):
-            loader = UnstructuredPowerPointLoader(file=file)
-        else:
-            raise ValueError(f"지원되지 않는 파일 형식: {file_name}")
-
-        documents = loader.load()
-        if not documents:
-            raise ValueError(f"{file_name}에서 텍스트를 추출할 수 없습니다.")
-
-        for doc in documents:
-            all_texts.append(doc.page_content)
-
-    return all_texts
-
-
-
-# 텍스트를 작은 조각으로 분할하는 함수
-def get_text_chunks(texts):
-    """텍스트를 작은 조각들로 분할"""
-    if not texts or not isinstance(texts, list):
-        raise ValueError("유효한 텍스트 데이터가 없습니다.")
-
-    documents = [Document(page_content=text) for text in texts]
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=900,
-        chunk_overlap=100,
-        length_function=tiktoken_len,
+def main():
+    # 페이지 설정: 제목과 아이콘 지정
+    st.set_page_config(
+        page_title="요리 도우미",
+        page_icon="🍳"
     )
 
-    return text_splitter.split_documents(documents)
+    # 앱 제목 설정
+    st.title("요리 도우미 🍳")
 
+    # 세션 상태 초기화
+    if "conversation" not in st.session_state:
+        st.session_state.conversation = None
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = None
+    if "processComplete" not in st.session_state:
+        st.session_state.processComplete = False
+    if 'messages' not in st.session_state:
+        st.session_state['messages'] = [
+            {"role": "assistant", "content": "안녕하세요! 요리 도우미입니다. 어떤 요리에 대해 알고 싶으신가요?"}
+        ]
 
-# 벡터 저장소 생성
-def get_vectorstore(text_chunks):
-    embeddings = HuggingFaceEmbeddings()
-    vector_store = FAISS.from_documents(text_chunks, embeddings)
-    return vector_store
+    # 사이드바 생성
+    with st.sidebar:
+        # 문서 업로드 기능
+        uploaded_files = st.file_uploader(
+            "요리 관련 문서 업로드", 
+            type=["pdf", "docx", "pptx"],
+            accept_multiple_files=True
+        )
+        
+        # OpenAI API 키 입력 필드
+        openai_api_key = st.text_input("OpenAI API Key", type="password")
+        if not openai_api_key:
+            st.info("API 키를 입력해주세요.", icon="🔑")
+        
+        # 문서 처리 버튼
+        process_button = st.button("문서 처리")
 
+    # 문서 처리 로직
+    if process_button:
+        if not validate_api_key(openai_api_key):
+            st.error("유효한 API 키를 입력해주세요.")
+            st.stop()
+        
+        if not uploaded_files:
+            st.warning("처리할 문서를 업로드해주세요.")
+            st.stop()
 
-# 대화 체인 구성
-def get_conversation_chain(vector_store, api_key):
-    chain = load_qa_chain(vector_store, api_key)
-    return chain
-
-
-# 메인 함수
-def main():
-    st.title("문서 처리 및 질문-응답 시스템")
-    st.subheader("문서를 업로드하고 질문하세요.")
-
-    # OpenAI API 키 입력
-    openai_api_key = st.text_input("OpenAI API Key", type="password")
-
-    # 파일 업로드
-    uploaded_files = st.file_uploader("파일 업로드", accept_multiple_files=True, type=["pdf", "docx", "pptx"])
-
-    # 처리 버튼
-    process = st.button("처리 시작")
-
-    if process:
         try:
-            # API 키 검증
-            if not openai_api_key:
-                st.info("OpenAI API 키를 입력해주세요.")
-                return
-
-            # 파일에서 텍스트 추출
-            files_text = get_text(uploaded_files)
-            if not files_text:
-                st.warning("추출된 텍스트가 없습니다.")
-                return
-
-            # 텍스트 분할
-            text_chunks = get_text_chunks(files_text)
-            if not text_chunks:
-                st.warning("텍스트 조각을 생성할 수 없습니다.")
-                return
-
-            # 벡터 저장소 생성
-            vector_store = get_vectorstore(text_chunks)
-
-            # 대화 체인 생성
-            st.session_state.conversation = get_conversation_chain(vector_store, openai_api_key)
-            st.session_state.processComplete = True
-
-            st.success("처리가 완료되었습니다. 질문을 입력하세요.")
+            with st.spinner("문서를 처리하는 중..."):
+                # 문서에서 텍스트 추출
+                docs = get_text(uploaded_files)
+                
+                # 텍스트 청크 생성
+                chunks = get_text_chunks(docs)
+                
+                # 임베딩 생성
+                embeddings = HuggingFaceEmbeddings(
+                    model_name="jhgan/ko-sroberta-multitask",
+                    model_kwargs={'device': 'cpu'},
+                    encode_kwargs={'normalize_embeddings': True}
+                )
+                
+                # 벡터 저장소 생성
+                vectorstore = FAISS.from_documents(documents=chunks, embedding=embeddings)
+                
+                # 대화 체인 초기화
+                st.session_state.conversation = get_conversation_chain(vectorstore, openai_api_key)
+                st.session_state.processComplete = True
+                st.success("문서 처리 완료!")
 
         except Exception as e:
-            st.error(f"오류 발생: {str(e)}")
+            st.error(f"문서 처리 중 오류 발생: {e}")
+            logger.error(f"문서 처리 오류: {e}")
 
+    # 채팅 인터페이스
+    chat_container = st.container()
+    with chat_container:
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
 
-if __name__ == "__main__":
+    # 사용자 입력 처리
+    if query := st.chat_input("질문을 입력하세요"):
+        # 사용자 메시지를 대화 히스토리에 추가
+        st.session_state.messages.append({"role": "user", "content": query})
+        
+        with st.chat_message("user"):
+            st.write(query)
+
+        # 대화 체인 준비 상태 확인
+        if not st.session_state.conversation:
+            st.warning("먼저 문서를 처리해주세요.")
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": "죄송합니다. 먼저 요리 관련 문서를 업로드하고 처리해주세요."
+            })
+            st.rerun()
+
+        # 질의 처리
+        with st.chat_message("assistant"):
+            with st.spinner("답변을 생성하는 중..."):
+                try:
+                    result = st.session_state.conversation({"question": query})
+                    response = result['answer']
+                    source_documents = result.get('source_documents', [])
+
+                    st.write(response)
+
+                    if source_documents:
+                        with st.expander("참고 문서"):
+                            for i, doc in enumerate(source_documents[:3], 1):
+                                st.markdown(f"**참고 {i}:** {doc.metadata.get('source', '알 수 없는 출처')}")
+                                st.markdown(f"```\n{doc.page_content[:200]}...\n```")
+
+                    # 어시스턴트 응답을 대화 히스토리에 추가
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+
+                except Exception as e:
+                    error_message = f"답변 생성 중 오류가 발생했습니다: {str(e)}"
+                    st.error(error_message)
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": error_message
+                    })
+                    logger.error(f"응답 생성 오류: {e}")
+
+def tiktoken_len(text):
+    """텍스트의 토큰 길이 계산 함수"""
+    tokenizer = tiktoken.get_encoding("cl100k_base")
+    tokens = tokenizer.encode(text)
+    return len(tokens)
+
+def get_text(docs):
+    """업로드된 문서에서 텍스트 추출하는 함수"""
+    doc_list = []
+    
+    for doc in docs:
+        try:
+            # 문서 저장
+            file_name = doc.name
+            with open(file_name, "wb") as file:
+                file.write(doc.getvalue())
+                logger.info(f"업로드된 파일: {file_name}")
+
+            # 파일 유형에 따라 로더 선택
+            if '.pdf' in doc.name.lower():
+                loader = PyPDFLoader(file_name)
+                documents = loader.load_and_split()
+            elif '.docx' in doc.name.lower():
+                loader = Docx2txtLoader(file_name)
+                documents = loader.load_and_split()
+            elif '.pptx' in doc.name.lower():
+                loader = UnstructuredPowerPointLoader(file_name)
+                documents = loader.load_and_split()
+            else:
+                continue
+
+            doc_list.extend(documents)
+        except Exception as e:
+            logger.error(f"문서 처리 중 오류 발생: {file_name}, 오류: {e}")
+            continue
+            
+    return doc_list
+
+def get_text_chunks(text):
+    """텍스트를 일정 크기의 청크로 분할하는 함수"""
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=900,     # 청크 크기
+        chunk_overlap=100,  # 청크 간 중복 텍스트 길이
+        length_function=tiktoken_len  # 토큰 길이 계산 함수
+    )
+    chunks = text_splitter.split_documents(text)
+    return chunks
+
+def get_conversation_chain(vectorstore, openai_api_key):
+    """대화 체인 생성 함수"""
+    # OpenAI 언어 모델 초기화
+    llm = ChatOpenAI(openai_api_key=openai_api_key, model_name='gpt-4', temperature=0)
+    
+    # 대화형 검색 체인 생성
+    conversation_chain = ConversationalRetrievalChain.from_llm(
+            llm=llm, 
+            chain_type="stuff", 
+            retriever=vectorstore.as_retriever(search_type='mmr', verbose=True), 
+            memory=ConversationBufferMemory(
+                memory_key='chat_history',
+                return_messages=True,
+                output_key='answer'
+            ),
+            get_chat_history=lambda h: h,
+            return_source_documents=True,
+            verbose=True
+        )
+
+    return conversation_chain
+
+if __name__ == '__main__':
     main()
