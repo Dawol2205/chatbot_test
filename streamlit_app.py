@@ -1,6 +1,5 @@
 import streamlit as st
 import tiktoken
-import json
 from loguru import logger
 from concurrent import futures
 
@@ -12,43 +11,10 @@ from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.memory import ConversationBufferMemory
 from langchain.vectorstores import FAISS
 from langchain.callbacks import get_openai_callback
-from langchain.document_loaders import JSONLoader
-from langchain.document_loaders.json import JsonOutputParser
 
 def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
     return api_key and len(api_key) > 20
-
-def process_json(file_path):
-    """JSON 파일 처리 함수"""
-    try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            data = json.load(file)
-            
-        # JSON을 텍스트로 변환
-        processed_text = []
-        
-        def extract_text(obj, path=""):
-            if isinstance(obj, dict):
-                for key, value in obj.items():
-                    new_path = f"{path}.{key}" if path else key
-                    if isinstance(value, (dict, list)):
-                        extract_text(value, new_path)
-                    else:
-                        processed_text.append(f"{new_path}: {value}")
-            elif isinstance(obj, list):
-                for i, item in enumerate(obj):
-                    new_path = f"{path}[{i}]"
-                    if isinstance(item, (dict, list)):
-                        extract_text(item, new_path)
-                    else:
-                        processed_text.append(f"{new_path}: {item}")
-                        
-        extract_text(data)
-        return "\n".join(processed_text)
-    except Exception as e:
-        logger.error(f"JSON 처리 중 오류 발생: {e}")
-        raise e
 
 def main():
     # 페이지 설정: 제목과 아이콘 지정
@@ -77,7 +43,7 @@ def main():
         # 문서 업로드 기능
         uploaded_files = st.file_uploader(
             "요리 관련 문서 업로드", 
-            type=["pdf", "docx", "pptx", "json"],  # JSON 추가
+            type=["pdf", "docx", "pptx"],
             accept_multiple_files=True
         )
         
@@ -103,10 +69,6 @@ def main():
             with st.spinner("문서를 처리하는 중..."):
                 # 문서에서 텍스트 추출
                 docs = get_text(uploaded_files)
-                
-                if not docs:
-                    st.error("처리할 수 있는 문서가 없습니다.")
-                    st.stop()
                 
                 # 텍스트 청크 생성
                 chunks = get_text_chunks(docs)
@@ -182,6 +144,12 @@ def main():
                     })
                     logger.error(f"응답 생성 오류: {e}")
 
+def tiktoken_len(text):
+    """텍스트의 토큰 길이 계산 함수"""
+    tokenizer = tiktoken.get_encoding("cl100k_base")
+    tokens = tokenizer.encode(text)
+    return len(tokens)
+
 def get_text(docs):
     """업로드된 문서에서 텍스트 추출하는 함수"""
     doc_list = []
@@ -204,10 +172,6 @@ def get_text(docs):
             elif '.pptx' in doc.name.lower():
                 loader = UnstructuredPowerPointLoader(file_name)
                 documents = loader.load_and_split()
-            elif '.json' in doc.name.lower():
-                # JSON 파일 처리
-                text_content = process_json(file_name)
-                documents = [Document(page_content=text_content, metadata={"source": file_name})]
             else:
                 continue
 
