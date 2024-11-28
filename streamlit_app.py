@@ -150,4 +150,38 @@ def get_text(docs):
             
     return doc_list
 
-# 나머지 함수들은 이전과 동일...
+
+def get_text_chunks(text):
+    """텍스트를 일정 크기의 청크로 분할하는 함수"""
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=900,     # 청크 크기
+        chunk_overlap=100,  # 청크 간 중복 텍스트 길이
+        length_function=tiktoken_len  # 토큰 길이 계산 함수
+    )
+    chunks = text_splitter.split_documents(text)
+    return chunks
+
+def get_conversation_chain(vectorstore, openai_api_key):
+    """대화 체인 생성 함수"""
+    # OpenAI 언어 모델 초기화
+    llm = ChatOpenAI(openai_api_key=openai_api_key, model_name='gpt-4', temperature=0)
+    
+    # 대화형 검색 체인 생성
+    conversation_chain = ConversationalRetrievalChain.from_llm(
+            llm=llm, 
+            chain_type="stuff", 
+            retriever=vectorstore.as_retriever(search_type='mmr', verbose=True), 
+            memory=ConversationBufferMemory(
+                memory_key='chat_history',
+                return_messages=True,
+                output_key='answer'
+            ),
+            get_chat_history=lambda h: h,
+            return_source_documents=True,
+            verbose=True
+        )
+
+    return conversation_chain
+
+if __name__ == '__main__':
+    main()
