@@ -1,6 +1,5 @@
 import streamlit as st
 import tiktoken
-import json
 from loguru import logger
 from concurrent import futures
 
@@ -12,8 +11,6 @@ from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.memory import ConversationBufferMemory
 from langchain.vectorstores import FAISS
 from langchain.callbacks import get_openai_callback
-from langchain.document_loaders import TextLoader
-from langchain.docstore.document import Document
 
 def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
@@ -46,7 +43,7 @@ def main():
         # 문서 업로드 기능
         uploaded_files = st.file_uploader(
             "요리 관련 문서 업로드", 
-            type=["pdf", "docx", "pptx", "json"],
+            type=["pdf", "docx", "pptx"],
             accept_multiple_files=True
         )
         
@@ -95,26 +92,63 @@ def main():
             st.error(f"문서 처리 중 오류 발생: {e}")
             logger.error(f"문서 처리 오류: {e}")
 
-    # 채팅 인터페이스와 나머지 코드는 동일...
-    [이전 코드와 동일한 부분 생략]
+    # 채팅 인터페이스
+    chat_container = st.container()
+    with chat_container:
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
 
-def process_json(file_path):
-    """JSON 파일을 처리하는 함수"""
-    try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            data = json.load(file)
+    # 사용자 입력 처리
+    if query := st.chat_input("질문을 입력하세요"):
+        # 사용자 메시지를 대화 히스토리에 추가
+        st.session_state.messages.append({"role": "user", "content": query})
         
-        # JSON 데이터를 문자열로 변환
-        text_content = json.dumps(data, ensure_ascii=False, indent=2)
-        
-        # Document 객체 생성
-        return [Document(
-            page_content=text_content,
-            metadata={"source": file_path}
-        )]
-    except Exception as e:
-        logger.error(f"JSON 파일 처리 중 오류 발생: {e}")
-        return []
+        with st.chat_message("user"):
+            st.write(query)
+
+        # 대화 체인 준비 상태 확인
+        if not st.session_state.conversation:
+            st.warning("먼저 문서를 처리해주세요.")
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": "죄송합니다. 먼저 요리 관련 문서를 업로드하고 처리해주세요."
+            })
+            st.rerun()
+
+        # 질의 처리
+        with st.chat_message("assistant"):
+            with st.spinner("답변을 생성하는 중..."):
+                try:
+                    result = st.session_state.conversation({"question": query})
+                    response = result['answer']
+                    source_documents = result.get('source_documents', [])
+
+                    st.write(response)
+
+                    if source_documents:
+                        with st.expander("참고 문서"):
+                            for i, doc in enumerate(source_documents[:3], 1):
+                                st.markdown(f"**참고 {i}:** {doc.metadata.get('source', '알 수 없는 출처')}")
+                                st.markdown(f"```\n{doc.page_content[:200]}...\n```")
+
+                    # 어시스턴트 응답을 대화 히스토리에 추가
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+
+                except Exception as e:
+                    error_message = f"답변 생성 중 오류가 발생했습니다: {str(e)}"
+                    st.error(error_message)
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": error_message
+                    })
+                    logger.error(f"응답 생성 오류: {e}")
+
+def tiktoken_len(text):
+    """텍스트의 토큰 길이 계산 함수"""
+    tokenizer = tiktoken.get_encoding("cl100k_base")
+    tokens = tokenizer.encode(text)
+    return len(tokens)
 
 def get_text(docs):
     """업로드된 문서에서 텍스트 추출하는 함수"""
@@ -138,8 +172,6 @@ def get_text(docs):
             elif '.pptx' in doc.name.lower():
                 loader = UnstructuredPowerPointLoader(file_name)
                 documents = loader.load_and_split()
-            elif '.json' in doc.name.lower():
-                documents = process_json(file_name)
             else:
                 continue
 
@@ -149,7 +181,6 @@ def get_text(docs):
             continue
             
     return doc_list
-
 
 def get_text_chunks(text):
     """텍스트를 일정 크기의 청크로 분할하는 함수"""
