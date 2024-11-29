@@ -283,7 +283,7 @@ def main():
                     "role": "assistant", 
                     "content": "죄송합니다. 먼저 JSON 파일을 업로드하고 처리해주세요."
                 })
-                st.return
+                st.stop()
 
             with st.chat_message("assistant"):
                 with st.spinner("답변을 생성하는 중..."):
