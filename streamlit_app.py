@@ -6,7 +6,6 @@ import requests
 from github import Github
 from datetime import datetime
 
-# Updated LangChain imports
 from langchain_openai import ChatOpenAI
 from langchain.chains.conversational_retrieval.base import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
@@ -82,7 +81,7 @@ def main():
 
         if 'initialized' not in st.session_state:
             st.session_state.initialized = True
-            st.experimental_rerun()
+            st.rerun()
 
         st.title("요리 도우미 🍳")
 
@@ -152,7 +151,7 @@ def main():
                     "role": "assistant", 
                     "content": "죄송합니다. 먼저 벡터 DB를 불러와주세요."
                 })
-                st.experimental_rerun()
+                st.rerun()
 
             with st.chat_message("assistant"):
                 with st.spinner("답변을 생성하는 중..."):
