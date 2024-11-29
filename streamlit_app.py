@@ -20,11 +20,27 @@ from langchain.docstore.document import Document
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# GitHub 저장소 정보
+GITHUB_REPO = "Dawol2205/chatbot_test"
+GITHUB_BRANCH = "main"
+VECTOR_PATH = "vector_store"
+
 def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
     return api_key and len(api_key) > 20
 
-def process_json(file):
+def validate_github_token(github_token):
+    """GitHub 토큰 검증"""
+    if not github_token:
+        return False
+    try:
+        g = Github(github_token)
+        g.get_user().login
+        return True
+    except:
+        return False
+
+def process_json_file(file):
     """JSON 파일을 처리하는 함수"""
     try:
         content = file.getvalue().decode('utf-8')
@@ -34,13 +50,69 @@ def process_json(file):
         text_content = json.dumps(data, ensure_ascii=False, indent=2)
         
         # Document 객체 생성
-        return [Document(
+        return Document(
             page_content=text_content,
             metadata={"source": file.name}
-        )]
+        )
     except Exception as e:
         logger.error(f"JSON 파일 처리 중 오류 발생: {e}")
-        return []
+        return None
+
+def process_json_files(files):
+    """여러 JSON 파일 처리"""
+    documents = []
+    for file in files:
+        doc = process_json_file(file)
+        if doc:
+            documents.append(doc)
+    return documents
+
+def save_vectorstore_to_github(vectorstore, github_token, repo_name=GITHUB_REPO, branch=GITHUB_BRANCH):
+    """벡터 저장소를 GitHub에 저장"""
+    try:
+        # 벡터 저장소를 바이트로 직렬화
+        serialized_vectorstore = pickle.dumps(vectorstore)
+        
+        # base64로 인코딩
+        encoded_content = base64.b64encode(serialized_vectorstore).decode()
+        
+        # GitHub API 연결
+        g = Github(github_token)
+        repo = g.get_repo(repo_name)
+        
+        # 파일명 생성 (타임스탬프 포함)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = f"{VECTOR_PATH}/vectorstore_{timestamp}.pkl"
+        
+        try:
+            # 폴더가 없는 경우 생성
+            try:
+                repo.get_contents(VECTOR_PATH)
+            except:
+                repo.create_file(
+                    f"{VECTOR_PATH}/.gitkeep",
+                    "Initialize vector store directory",
+                    "",
+                    branch=branch
+                )
+
+            # 벡터 저장소 파일 저장
+            repo.create_file(
+                file_path,
+                f"Create vector store {timestamp}",
+                encoded_content,
+                branch=branch
+            )
+            
+            return True, file_path
+            
+        except Exception as e:
+            logger.error(f"GitHub 파일 생성 오류: {e}")
+            return False, str(e)
+        
+    except Exception as e:
+        logger.error(f"GitHub 저장 오류: {e}")
+        return False, str(e)
 
 def get_text_chunks(documents):
     """텍스트를 청크로 분할"""
@@ -59,24 +131,6 @@ def create_vector_store(documents):
     )
     
     return FAISS.from_documents(documents=documents, embedding=embeddings)
-
-def save_vector_store(vectorstore, directory="vector_store"):
-    """벡터 저장소를 로컬에 저장"""
-    try:
-        # 저장 디렉토리가 없으면 생성
-        if not os.path.exists(directory):
-            os.makedirs(directory)
-        
-        file_path = os.path.join(directory, "index.pkl")
-        
-        # 벡터 저장소를 파일로 저장
-        with open(file_path, 'wb') as f:
-            pickle.dump(vectorstore, f)
-        
-        return True, file_path
-    except Exception as e:
-        logger.error(f"저장 오류: {e}")
-        return False, str(e)
 
 def get_conversation_chain(vectorstore, openai_api_key):
     """대화 체인 생성"""
@@ -127,20 +181,29 @@ def main():
             openai_api_key = st.text_input("OpenAI API Key", type="password")
             if not openai_api_key:
                 st.info("OpenAI API 키를 입력해주세요.", icon="🔑")
+            
+            # GitHub 토큰
+            github_token = st.text_input("GitHub Token", type="password")
+            if not github_token:
+                st.info("GitHub 토큰을 입력해주세요.", icon="🔑")
 
             # JSON 파일 업로드
             st.header("JSON 파일 업로드")
-            uploaded_file = st.file_uploader("JSON 파일 선택", type=["json"])
+            uploaded_files = st.file_uploader(
+                "JSON 파일 선택",
+                type=["json"],
+                accept_multiple_files=True
+            )
             
             # 처리 버튼들
             col1, col2 = st.columns(2)
             with col1:
                 process_button = st.button("파일 처리")
             with col2:
-                save_button = st.button("벡터 저장")
+                save_button = st.button("GitHub에 저장")
 
         # JSON 파일 처리
-        if uploaded_file and process_button:
+        if uploaded_files and process_button:
             if not validate_api_key(openai_api_key):
                 st.error("유효한 OpenAI API 키를 입력해주세요.")
                 st.stop()
@@ -148,7 +211,7 @@ def main():
             try:
                 with st.spinner("JSON 파일 처리 중..."):
                     # JSON 처리
-                    documents = process_json(uploaded_file)
+                    documents = process_json_files(uploaded_files)
                     if not documents:
                         st.error("JSON 파일 처리에 실패했습니다.")
                         st.stop()
@@ -168,23 +231,30 @@ def main():
                 st.error(f"파일 처리 중 오류 발생: {str(e)}")
                 logger.error(f"처리 오류: {e}")
 
-        # 벡터 저장소 저장
+        # GitHub에 벡터 저장소 저장
         if save_button:
             if not st.session_state.vectorstore:
                 st.error("저장할 벡터 데이터가 없습니다. 먼저 JSON 파일을 처리해주세요.")
                 st.stop()
+                
+            if not validate_github_token(github_token):
+                st.error("유효한 GitHub 토큰을 입력해주세요.")
+                st.stop()
 
             try:
-                with st.spinner("벡터 저장소 저장 중..."):
-                    success, result = save_vector_store(st.session_state.vectorstore)
+                with st.spinner("벡터 저장소를 GitHub에 저장하는 중..."):
+                    success, result = save_vectorstore_to_github(
+                        st.session_state.vectorstore,
+                        github_token
+                    )
                     if success:
-                        st.success(f"벡터 저장소를 저장했습니다! (경로: {result})")
+                        st.success(f"벡터 저장소를 GitHub에 저장했습니다! (경로: {result})")
                     else:
-                        st.error(f"저장 실패: {result}")
+                        st.error(f"GitHub 저장 실패: {result}")
 
             except Exception as e:
-                st.error(f"저장 중 오류 발생: {str(e)}")
-                logger.error(f"저장 오류: {e}")
+                st.error(f"GitHub 저장 중 오류 발생: {str(e)}")
+                logger.error(f"GitHub 저장 오류: {e}")
 
         # 채팅 인터페이스
         chat_container = st.container()
