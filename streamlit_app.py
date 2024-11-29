@@ -7,8 +7,7 @@ from loguru import logger
 import pickle
 from datetime import datetime
 
-# Updated LangChain imports
-from langchain_community.chains import ConversationalRetrievalChain
+from langchain.chains import ConversationalRetrievalChain
 from langchain_openai import ChatOpenAI
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.memory import ConversationBufferMemory
