@@ -158,20 +158,27 @@ def main():
         st.set_page_config(
             page_title="요리 도우미",
             page_icon="🍳",
-            layout="wide"
+            layout="wide",
+            initial_sidebar_state="expanded"
         )
+
+        # 세션 상태 초기화
+        initialize_session_state()
 
         st.title("요리 도우미 🍳")
 
-        # 세션 상태 초기화
-        if "conversation" not in st.session_state:
-            st.session_state.conversation = None
-        if 'messages' not in st.session_state:
-            st.session_state['messages'] = [
-                {"role": "assistant", "content": "안녕하세요! 요리 도우미입니다. 어떤 요리에 대해 알고 싶으신가요?"}
-            ]
-        if 'vectorstore' not in st.session_state:
-            st.session_state.vectorstore = None
+        def initialize_session_state():
+            """세션 상태 초기화"""
+            if "initialized" not in st.session_state:
+                st.session_state.initialized = True
+            if "conversation" not in st.session_state:
+                st.session_state.conversation = None
+            if "messages" not in st.session_state:
+                st.session_state.messages = [
+                    {"role": "assistant", "content": "안녕하세요! 요리 도우미입니다. 어떤 요리에 대해 알고 싶으신가요?"}
+                ]
+            if "vectorstore" not in st.session_state:
+                st.session_state.vectorstore = None
 
         # 사이드바 설정
         with st.sidebar:
@@ -276,7 +283,7 @@ def main():
                     "role": "assistant", 
                     "content": "죄송합니다. 먼저 JSON 파일을 업로드하고 처리해주세요."
                 })
-                st.rerun()
+                return
 
             with st.chat_message("assistant"):
                 with st.spinner("답변을 생성하는 중..."):
