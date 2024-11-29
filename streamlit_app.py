@@ -237,10 +237,23 @@ def main():
         try:
             with st.spinner("문서를 처리하는 중..."):
                 # 문서에서 텍스트 추출
-                docs = get_text(uploaded_files)
+                try:
+                    docs = get_text(uploaded_files)
+                    if not docs:
+                        st.error("처리할 수 있는 내용이 문서에 없습니다.")
+                        st.stop()
+                except ValueError as e:
+                    st.error(str(e))
+                    st.stop()
+                except Exception as e:
+                    st.error(f"문서 처리 중 오류가 발생했습니다: {str(e)}")
+                    st.stop()
                 
                 # 텍스트 청크 생성
                 chunks = get_text_chunks(docs)
+                if not chunks:
+                    st.error("문서를 청크로 분할할 수 없습니다.")
+                    st.stop()
                 
                 # 임베딩 생성
                 embeddings = HuggingFaceEmbeddings(
@@ -259,6 +272,10 @@ def main():
                 st.session_state.conversation = get_conversation_chain(vectorstore, openai_api_key)
                 st.session_state.processComplete = True
                 st.success("문서 처리 완료!")
+
+    except Exception as e:
+        st.error(f"문서 처리 중 오류 발생: {str(e)}")
+        logger.error(f"문서 처리 오류: {e}")
 
         except Exception as e:
             st.error(f"문서 처리 중 오류 발생: {e}")
