@@ -1,11 +1,8 @@
 import streamlit as st
 import logging
 import pickle
-import base64
-import requests
 import json
 import os
-from github import Github
 from datetime import datetime
 
 from langchain_openai import ChatOpenAI
@@ -15,15 +12,14 @@ from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.docstore.document import Document
+from langchain.prompts import PromptTemplate
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# GitHub 저장소 정보
-GITHUB_REPO = "Dawol2205/chatbot_test"
-GITHUB_BRANCH = "main"
-VECTOR_PATH = "vector_store"
+# 벡터 저장소 경로
+VECTOR_PATH = "vectorstore"
 
 def initialize_session_state():
     """세션 상태 초기화"""
@@ -37,21 +33,18 @@ def initialize_session_state():
         ]
     if "vectorstore" not in st.session_state:
         st.session_state.vectorstore = None
+    if "custom_prompt" not in st.session_state:
+        st.session_state.custom_prompt = """
+아래 정보를 기반으로 사용자의 질문에 답변해주세요:
+{context}
+
+사용자 질문: {question}
+답변: 주어진 정보를 바탕으로 상세하게 답변하겠습니다.
+"""
 
 def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
     return api_key and len(api_key) > 20
-
-def validate_github_token(github_token):
-    """GitHub 토큰 검증"""
-    if not github_token:
-        return False
-    try:
-        g = Github(github_token)
-        g.get_user().login
-        return True
-    except:
-        return False
 
 def process_json_file(file):
     """JSON 파일을 처리하는 함수"""
@@ -80,51 +73,34 @@ def process_json_files(files):
             documents.append(doc)
     return documents
 
-def save_vectorstore_to_github(vectorstore, github_token, repo_name=GITHUB_REPO, branch=GITHUB_BRANCH):
-    """벡터 저장소를 GitHub에 저장"""
+def save_vectorstore_local(vectorstore, directory=VECTOR_PATH):
+    """벡터 저장소를 로컬에 저장"""
     try:
-        # 벡터 저장소를 바이트로 직렬화
-        serialized_vectorstore = pickle.dumps(vectorstore)
-        
-        # base64로 인코딩
-        encoded_content = base64.b64encode(serialized_vectorstore).decode()
-        
-        # GitHub API 연결
-        g = Github(github_token)
-        repo = g.get_repo(repo_name)
+        # 저장 디렉토리가 없으면 생성
+        if not os.path.exists(directory):
+            os.makedirs(directory)
         
         # 파일명 생성 (타임스탬프 포함)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_path = f"{VECTOR_PATH}/vectorstore_{timestamp}.pkl"
+        file_path = os.path.join(directory, f"vectorstore_{timestamp}.pkl")
         
-        try:
-            # 폴더가 없는 경우 생성
-            try:
-                repo.get_contents(VECTOR_PATH)
-            except:
-                repo.create_file(
-                    f"{VECTOR_PATH}/.gitkeep",
-                    "Initialize vector store directory",
-                    "",
-                    branch=branch
-                )
-
-            # 벡터 저장소 파일 저장
-            repo.create_file(
-                file_path,
-                f"Create vector store {timestamp}",
-                encoded_content,
-                branch=branch
-            )
-            
-            return True, file_path
-            
-        except Exception as e:
-            logger.error(f"GitHub 파일 생성 오류: {e}")
-            return False, str(e)
+        # 벡터 저장소를 파일로 저장
+        with open(file_path, 'wb') as f:
+            pickle.dump(vectorstore, f)
         
+        return True, file_path
     except Exception as e:
-        logger.error(f"GitHub 저장 오류: {e}")
+        logger.error(f"로컬 저장 오류: {e}")
+        return False, str(e)
+
+def load_vectorstore_local(file_path):
+    """로컬에서 벡터 저장소를 불러오기"""
+    try:
+        with open(file_path, 'rb') as f:
+            vectorstore = pickle.load(f)
+        return True, vectorstore
+    except Exception as e:
+        logger.error(f"로컬 로드 오류: {e}")
         return False, str(e)
 
 def get_text_chunks(documents):
@@ -145,9 +121,15 @@ def create_vector_store(documents):
     
     return FAISS.from_documents(documents=documents, embedding=embeddings)
 
-def get_conversation_chain(vectorstore, openai_api_key):
+def get_conversation_chain(vectorstore, openai_api_key, custom_prompt):
     """대화 체인 생성"""
     llm = ChatOpenAI(openai_api_key=openai_api_key, model_name='gpt-4', temperature=0)
+    
+    # 프롬프트 템플릿 생성
+    PROMPT = PromptTemplate(
+        template=custom_prompt,
+        input_variables=["context", "question"]
+    )
     
     conversation_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
@@ -158,6 +140,7 @@ def get_conversation_chain(vectorstore, openai_api_key):
             return_messages=True,
             output_key='answer'
         ),
+        combine_docs_chain_kwargs={"prompt": PROMPT},
         get_chat_history=lambda h: h,
         return_source_documents=True,
         verbose=True
@@ -188,13 +171,14 @@ def main():
             openai_api_key = st.text_input("OpenAI API Key", type="password")
             if not openai_api_key:
                 st.info("OpenAI API 키를 입력해주세요.", icon="🔑")
-            
-            # GitHub 토큰
-            github_token = st.text_input("GitHub Token", type="password")
-            if not github_token:
-                st.info("GitHub 토큰을 입력해주세요.", icon="🔑")
 
-            # JSON 파일 업로드
+            # 프롬프트 템플릿 설정
+            st.header("프롬프트 템플릿")
+            custom_prompt = st.text_area("RAG 프롬프트", value=st.session_state.custom_prompt)
+            if custom_prompt != st.session_state.custom_prompt:
+                st.session_state.custom_prompt = custom_prompt
+
+            # JSON 파일 업로드 섹션
             st.header("JSON 파일 업로드")
             uploaded_files = st.file_uploader(
                 "JSON 파일 선택",
@@ -207,7 +191,45 @@ def main():
             with col1:
                 process_button = st.button("파일 처리")
             with col2:
-                save_button = st.button("GitHub에 저장")
+                save_button = st.button("벡터 저장")
+
+            # 벡터 파일 로드 섹션
+            st.header("벡터 파일 불러오기")
+            vector_files = []
+            if os.path.exists(VECTOR_PATH):
+                vector_files = [f for f in os.listdir(VECTOR_PATH) if f.endswith('.pkl')]
+            
+            if vector_files:
+                selected_file = st.selectbox("저장된 벡터 파일 선택", vector_files)
+                load_button = st.button("벡터 불러오기")
+            else:
+                st.info("저장된 벡터 파일이 없습니다.")
+
+        # 벡터 파일 불러오기
+        if vector_files and load_button and selected_file:
+            if not validate_api_key(openai_api_key):
+                st.error("유효한 OpenAI API 키를 입력해주세요.")
+                st.stop()
+
+            try:
+                with st.spinner("벡터 저장소를 불러오는 중..."):
+                    file_path = os.path.join(VECTOR_PATH, selected_file)
+                    success, result = load_vectorstore_local(file_path)
+                    
+                    if success:
+                        st.session_state.vectorstore = result
+                        st.session_state.conversation = get_conversation_chain(
+                            result, 
+                            openai_api_key,
+                            st.session_state.custom_prompt
+                        )
+                        st.success("벡터 저장소를 성공적으로 불러왔습니다!")
+                    else:
+                        st.error(f"벡터 저장소 불러오기 실패: {result}")
+                        
+            except Exception as e:
+                st.error(f"벡터 파일 불러오기 중 오류 발생: {e}")
+                logger.error(f"로컬 로드 오류: {e}")
 
         # JSON 파일 처리
         if uploaded_files and process_button:
@@ -231,37 +253,34 @@ def main():
                     
                     # 세션에 저장
                     st.session_state.vectorstore = vectorstore
-                    st.session_state.conversation = get_conversation_chain(vectorstore, openai_api_key)
+                    st.session_state.conversation = get_conversation_chain(
+                        vectorstore, 
+                        openai_api_key,
+                        st.session_state.custom_prompt
+                    )
                     st.success("JSON 파일 처리 완료!")
 
             except Exception as e:
                 st.error(f"파일 처리 중 오류 발생: {str(e)}")
                 logger.error(f"처리 오류: {e}")
 
-        # GitHub에 벡터 저장소 저장
+        # 벡터 저장소 로컬 저장
         if save_button:
             if not st.session_state.vectorstore:
                 st.error("저장할 벡터 데이터가 없습니다. 먼저 JSON 파일을 처리해주세요.")
                 st.stop()
-                
-            if not validate_github_token(github_token):
-                st.error("유효한 GitHub 토큰을 입력해주세요.")
-                st.stop()
 
             try:
-                with st.spinner("벡터 저장소를 GitHub에 저장하는 중..."):
-                    success, result = save_vectorstore_to_github(
-                        st.session_state.vectorstore,
-                        github_token
-                    )
+                with st.spinner("벡터 저장소를 저장하는 중..."):
+                    success, result = save_vectorstore_local(st.session_state.vectorstore)
                     if success:
-                        st.success(f"벡터 저장소를 GitHub에 저장했습니다! (경로: {result})")
+                        st.success(f"벡터 저장소를 저장했습니다! (경로: {result})")
                     else:
-                        st.error(f"GitHub 저장 실패: {result}")
+                        st.error(f"저장 실패: {result}")
 
             except Exception as e:
-                st.error(f"GitHub 저장 중 오류 발생: {str(e)}")
-                logger.error(f"GitHub 저장 오류: {e}")
+                st.error(f"저장 중 오류 발생: {str(e)}")
+                logger.error(f"저장 오류: {e}")
 
         # 채팅 인터페이스
         chat_container = st.container()
@@ -278,10 +297,10 @@ def main():
                 st.write(query)
 
             if not st.session_state.conversation:
-                st.warning("먼저 JSON 파일을 처리해주세요.")
+                st.warning("먼저 JSON 파일을 처리하거나 벡터를 불러와주세요.")
                 st.session_state.messages.append({
                     "role": "assistant", 
-                    "content": "죄송합니다. 먼저 JSON 파일을 업로드하고 처리해주세요."
+                    "content": "죄송합니다. 먼저 JSON 파일을 업로드하고 처리하거나 저장된 벡터를 불러와주세요."
                 })
                 st.stop()
 
