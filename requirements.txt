@@ -1,10 +1,12 @@
 streamlit
 langchain
+openai
 tiktoken
 loguru
-transformers
 faiss-cpu
 sentence-transformers
-openai
-requests
+PyGithub
 python-dotenv
+unstructured
+python-docx
+PyPDF2
