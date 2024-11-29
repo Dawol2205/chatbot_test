@@ -9,17 +9,17 @@ import pickle
 import base64
 from datetime import datetime
 
-from langchain.chat_models import ChatOpenAI 
-from langchain.chains import ConversationChain 
-from langchain.chains.conversation.memory import ConversationBufferMemory
+# Updated LangChain imports
+from langchain.chat_models import ChatOpenAI
+from langchain.chains import create_retrieval_chain
+from langchain.chains import create_history_aware_retriever
+from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredPowerPointLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain.memory import ConversationBufferMemory
 from langchain_community.vectorstores import FAISS
-from langchain.callbacks import get_openai_callback
-from langchain.schema import Document
-
-from langchain.chains import ConversationalRetrievalChain 
+from langchain_core.documents import Document
 
 def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
@@ -232,21 +232,25 @@ def get_conversation_chain(vectorstore, openai_api_key):
     """대화 체인 생성 함수"""
     llm = ChatOpenAI(openai_api_key=openai_api_key, model_name='gpt-4', temperature=0)
     
-    conversation_chain = ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        chain_type="stuff",
-        retriever=vectorstore.as_retriever(search_type='mmr', verbose=True),
-        memory=ConversationBufferMemory(
-            memory_key='chat_history',
-            return_messages=True,
-            output_key='answer'
-        ),
-        get_chat_history=lambda h: h,
+    # Create memory
+    memory = ConversationBufferMemory(
+        memory_key='chat_history',
+        return_messages=True
+    )
+    
+    # Create retriever
+    retriever = vectorstore.as_retriever(search_type='mmr', verbose=True)
+    
+    # Create retrieval chain
+    chain = create_retrieval_chain(
+        retriever,
+        llm,
+        memory=memory,
         return_source_documents=True,
         verbose=True
     )
 
-    return conversation_chain
+    return chain
 
 def main():
     # Streamlit 설정 초기화
