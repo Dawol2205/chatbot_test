@@ -1,9 +1,9 @@
-openai
 streamlit
 langchain
 langchain-openai
 langchain-community
 faiss-cpu
-PyGithub
+sentence-transformers
+tiktoken
 requests
 python-dotenv
