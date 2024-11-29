@@ -292,12 +292,8 @@ def main():
                 st.session_state.processComplete = True
                 st.success("문서 처리 완료!")
 
-    except Exception as e:
-        st.error(f"문서 처리 중 오류 발생: {str(e)}")
-        logger.error(f"문서 처리 오류: {e}")
-
         except Exception as e:
-            st.error(f"문서 처리 중 오류 발생: {e}")
+            st.error(f"문서 처리 중 오류 발생: {str(e)}")
             logger.error(f"문서 처리 오류: {e}")
 
     # 벡터 저장소 로컬 저장
@@ -347,9 +343,7 @@ def main():
                 try:
                     result = st.session_state.conversation({"question": query})
                     response = result['answer']
-                    source_documents = result.get('source_documents', [])
-
-                    st.write(response)
+                    source_documents = result.
 
                     if source_documents:
                         with st.expander("참고 문서"):
