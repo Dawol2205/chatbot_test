@@ -3,8 +3,8 @@ PyGithub
 tiktoken
 loguru
 faiss-cpu
-langchain
-langchain-community
+langchain==0.1.0 
+langchain-community==0.0.10
 PyPDF2
 python-docx
 unstructured
