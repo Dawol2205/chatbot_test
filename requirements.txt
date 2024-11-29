@@ -6,5 +6,5 @@ transformers
 faiss-cpu
 sentence-transformers
 openai
-PyGithub
 requests
+python-dotenv
