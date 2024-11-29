@@ -6,8 +6,9 @@ import requests
 from github import Github
 from datetime import datetime
 
-from langchain_community.chat_models import ChatOpenAI
-from langchain_community.chains import ConversationalRetrievalChain
+# Updated LangChain imports
+from langchain_openai import ChatOpenAI
+from langchain.chains.conversational_retrieval.base import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 from langchain_community.vectorstores import FAISS
 
