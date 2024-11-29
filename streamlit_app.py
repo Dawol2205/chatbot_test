@@ -10,7 +10,7 @@ from datetime import datetime
 from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_core.memory import ConversationBufferMemory
+from langchain.memory import ConversationBufferMemory
 from langchain_community.vectorstores import FAISS
 from langchain_community.callbacks import get_openai_callback
 
