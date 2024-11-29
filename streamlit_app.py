@@ -1,4 +1,3 @@
-from github import Github
 import streamlit as st
 import tiktoken
 import json
@@ -7,19 +6,19 @@ import requests
 from loguru import logger
 import pickle
 import base64
+from github import Github
 from datetime import datetime
 
-# Updated LangChain imports
+from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
-from langchain.chains import create_retrieval_chain
-from langchain.chains import create_history_aware_retriever
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredPowerPointLoader, TextLoader
+from langchain.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredPowerPointLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.memory import ConversationBufferMemory
-from langchain_community.vectorstores import FAISS
-from langchain_core.documents import Document
+from langchain.vectorstores import FAISS
+from langchain.callbacks import get_openai_callback
+from langchain.document_loaders import TextLoader
+from langchain.docstore.document import Document
 
 def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
@@ -49,22 +48,9 @@ def save_vectorstore_to_github(vectorstore, github_token, repo_name="Dawol2205/c
         g = Github(github_token)
         repo = g.get_repo(repo_name)
         
-        # vector_db 폴더 존재 여부 확인
-        vector_db_path = "vector_db"
-        try:
-            repo.get_contents(vector_db_path, ref=branch)
-        except Exception:
-            # 폴더가 없으면 생성 (빈 파일 생성으로 폴더 생성)
-            repo.create_file(
-                f"{vector_db_path}/.gitkeep",
-                "Create vector_db directory",
-                "",
-                branch=branch
-            )
-        
         # 파일명 생성 (타임스탬프 포함)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_path = f"{vector_db_path}/vectorstore_{timestamp}.pkl"
+        file_path = f"vector_db/vectorstore_{timestamp}.pkl"
         
         try:
             # 기존 파일이 있는지 확인
@@ -77,7 +63,7 @@ def save_vectorstore_to_github(vectorstore, github_token, repo_name="Dawol2205/c
                 contents.sha,
                 branch=branch
             )
-        except Exception:
+        except:
             # 파일이 없으면 새로 생성
             repo.create_file(
                 file_path,
@@ -99,15 +85,8 @@ def load_vectorstore_from_github(github_token, file_path, repo_name="Dawol2205/c
         g = Github(github_token)
         repo = g.get_repo(repo_name)
         
-        try:
-            # 파일 내용 가져오기
-            content = repo.get_contents(file_path, ref=branch)
-        except Exception as e:
-            # 파일이나 폴더가 없는 경우
-            if "Not Found" in str(e):
-                logger.error(f"파일을 찾을 수 없습니다: {file_path}")
-                return False, f"파일을 찾을 수 없습니다: {file_path}"
-            raise e
+        # 파일 내용 가져오기
+        content = repo.get_contents(file_path, ref=branch)
         
         # base64 디코딩
         decoded_content = base64.b64decode(content.content)
@@ -119,26 +98,6 @@ def load_vectorstore_from_github(github_token, file_path, repo_name="Dawol2205/c
         
     except Exception as e:
         logger.error(f"GitHub 로드 오류: {e}")
-        return False, str(e)
-
-def list_vector_files(github_token, repo_name="Dawol2205/chatbot_test", branch="main"):
-    """GitHub의 vector_db 폴더에 있는 벡터 파일 목록을 반환하는 함수"""
-    try:
-        g = Github(github_token)
-        repo = g.get_repo(repo_name)
-        vector_db_path = "vector_db"
-        
-        try:
-            contents = repo.get_contents(vector_db_path, ref=branch)
-            vector_files = [content.path for content in contents if content.path.endswith('.pkl')]
-            return True, vector_files
-        except Exception as e:
-            if "Not Found" in str(e):
-                return False, "vector_db 폴더를 찾을 수 없습니다."
-            raise e
-            
-    except Exception as e:
-        logger.error(f"벡터 파일 목록 조회 오류: {e}")
         return False, str(e)
 
 def process_json(file_path):
@@ -232,32 +191,23 @@ def get_conversation_chain(vectorstore, openai_api_key):
     """대화 체인 생성 함수"""
     llm = ChatOpenAI(openai_api_key=openai_api_key, model_name='gpt-4', temperature=0)
     
-    # Create memory
-    memory = ConversationBufferMemory(
-        memory_key='chat_history',
-        return_messages=True
-    )
-    
-    # Create retriever
-    retriever = vectorstore.as_retriever(search_type='mmr', verbose=True)
-    
-    # Create retrieval chain
-    chain = create_retrieval_chain(
-        retriever,
-        llm,
-        memory=memory,
+    conversation_chain = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        chain_type="stuff",
+        retriever=vectorstore.as_retriever(search_type='mmr', verbose=True),
+        memory=ConversationBufferMemory(
+            memory_key='chat_history',
+            return_messages=True,
+            output_key='answer'
+        ),
+        get_chat_history=lambda h: h,
         return_source_documents=True,
         verbose=True
     )
 
-    return chain
+    return conversation_chain
 
 def main():
-    # Streamlit 설정 초기화
-    if 'initialized' not in st.session_state:
-        st.session_state.initialized = True
-        st.rerun()
-
     # 페이지 설정
     st.set_page_config(
         page_title="요리 도우미",
@@ -311,22 +261,12 @@ def main():
             
         # GitHub 파일 선택기
         st.header("벡터 DB 불러오기")
-        if github_token:
-            success, vector_files = list_vector_files(github_token)
-            if success and vector_files:
-                selected_file = st.selectbox(
-                    "저장된 벡터 파일 선택",
-                    options=vector_files,
-                    format_func=lambda x: x.split('/')[-1]
-                )
-                load_github_button = st.button("GitHub에서 불러오기")
-            else:
-                st.info("저장된 벡터 파일이 없습니다. 먼저 벡터를 저장해주세요.")
-        else:
-            st.info("GitHub 토큰을 입력하면 저장된 벡터 파일 목록을 볼 수 있습니다.")
+        vector_file = st.text_input("벡터 파일 경로 (예: vector_db/example.pkl)")
+        if vector_file:
+            load_github_button = st.button("GitHub에서 불러오기")
 
     # GitHub에서 벡터 DB 불러오기
-    if 'load_github_button' in locals() and load_github_button:
+    if vector_file and load_github_button:
         if not validate_api_key(openai_api_key):
             st.error("유효한 OpenAI API 키를 입력해주세요.")
             st.stop()
@@ -337,7 +277,7 @@ def main():
 
         try:
             with st.spinner("벡터 DB를 불러오는 중..."):
-                success, result = load_vectorstore_from_github(github_token, selected_file)
+                success, result = load_vectorstore_from_github(github_token, vector_file)
                 
                 if success:
                     st.session_state.vectorstore = result
@@ -352,59 +292,59 @@ def main():
             logger.error(f"GitHub 로드 오류: {e}")
 
     # 문서 처리 로직
-        if process_button:
-            if not validate_api_key(openai_api_key):
-                st.error("유효한 OpenAI API 키를 입력해주세요.")
-                st.stop()
-            
-            if not uploaded_files:
-                st.warning("처리할 문서를 업로드해주세요.")
-                st.stop()
+    if process_button:
+        if not validate_api_key(openai_api_key):
+            st.error("유효한 OpenAI API 키를 입력해주세요.")
+            st.stop()
+        
+        if not uploaded_files:
+            st.warning("처리할 문서를 업로드해주세요.")
+            st.stop()
 
-            try:
-                with st.spinner("문서를 처리하는 중..."):
-                    # 문서에서 텍스트 추출
-                    try:
-                        docs = get_text(uploaded_files)
-                        if not docs:
-                            st.error("처리할 수 있는 내용이 문서에 없습니다.")
-                            st.stop()
-                    except ValueError as e:
-                        st.error(str(e))
+        try:
+            with st.spinner("문서를 처리하는 중..."):
+                # 문서에서 텍스트 추출
+                try:
+                    docs = get_text(uploaded_files)
+                    if not docs:
+                        st.error("처리할 수 있는 내용이 문서에 없습니다.")
                         st.stop()
-                    except Exception as e:
-                        st.error(f"문서 처리 중 오류가 발생했습니다: {str(e)}")
-                        st.stop()
-                    
-                    # 텍스트 청크 생성
-                    chunks = get_text_chunks(docs)
-                    if not chunks:
-                        st.error("문서를 청크로 분할할 수 없습니다.")
-                        st.stop()
-                    
-                    # 임베딩 생성
-                    embeddings = HuggingFaceEmbeddings(
-                        model_name="jhgan/ko-sroberta-multitask",
-                        model_kwargs={'device': 'cpu'},
-                        encode_kwargs={'normalize_embeddings': True}
-                    )
-                    
-                    # 벡터 저장소 생성
-                    vectorstore = FAISS.from_documents(documents=chunks, embedding=embeddings)
-                    
-                    # 세션에 벡터 저장소 저장
-                    st.session_state.vectorstore = vectorstore
-                    
-                    # 대화 체인 초기화
-                    st.session_state.conversation = get_conversation_chain(vectorstore, openai_api_key)
-                    st.session_state.processComplete = True
-                    st.success("문서 처리 완료!")
+                except ValueError as e:
+                    st.error(str(e))
+                    st.stop()
+                except Exception as e:
+                    st.error(f"문서 처리 중 오류가 발생했습니다: {str(e)}")
+                    st.stop()
+                
+                # 텍스트 청크 생성
+                chunks = get_text_chunks(docs)
+                if not chunks:
+                    st.error("문서를 청크로 분할할 수 없습니다.")
+                    st.stop()
+                
+                # 임베딩 생성
+                embeddings = HuggingFaceEmbeddings(
+                    model_name="jhgan/ko-sroberta-multitask",
+                    model_kwargs={'device': 'cpu'},
+                    encode_kwargs={'normalize_embeddings': True}
+                )
+                
+                # 벡터 저장소 생성
+                vectorstore = FAISS.from_documents(documents=chunks, embedding=embeddings)
+                
+                # 세션에 벡터 저장소 저장
+                st.session_state.vectorstore = vectorstore
+                
+                # 대화 체인 초기화
+                st.session_state.conversation = get_conversation_chain(vectorstore, openai_api_key)
+                st.session_state.processComplete = True
+                st.success("문서 처리 완료!")
 
-            except Exception as e:
-                st.error(f"문서 처리 중 오류 발생: {str(e)}")
-                logger.error(f"문서 처리 오류: {e}")
+        except Exception as e:
+            st.error(f"문서 처리 중 오류 발생: {str(e)}")
+            logger.error(f"문서 처리 오류: {e}")
 
-        # GitHub에 벡터 저장소 저장
+    # GitHub에 벡터 저장소 저장
         if save_github_button:
             if not st.session_state.vectorstore:
                 st.error("저장할 벡터 데이터가 없습니다. 먼저 문서를 처리해주세요.")
