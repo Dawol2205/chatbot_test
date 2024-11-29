@@ -331,30 +331,43 @@ def main():
             with st.chat_message(message["role"]):
                 st.write(message["content"])
 
-    # 사용자 입력 처리
-    if query := st.chat_input("질문을 입력하세요"):
-        st.session_state.messages.append({"role": "user", "content": query})
-        
-        with st.chat_message("user"):
-            st.write(query)
+   # 사용자 입력 처리
+if query := st.chat_input("질문을 입력하세요"):
+    st.session_state.messages.append({"role": "user", "content": query})
+    
+    with st.chat_message("user"):
+        st.write(query)
 
-        if not st.session_state.conversation:
-            st.warning("먼저 문서를 처리하거나 벡터 저장소를 불러와주세요.")
-            st.session_state.messages.append({
-                "role": "assistant", 
-                "content": "죄송합니다. 먼저 요리 관련 문서를 업로드하거나 기존 벡터 저장소를 불러와주세요."
-            })
-            st.rerun()
+    if not st.session_state.conversation:
+        st.warning("먼저 문서를 처리하거나 벡터 저장소를 불러와주세요.")
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": "죄송합니다. 먼저 요리 관련 문서를 업로드하거나 기존 벡터 저장소를 불러와주세요."
+        })
+        st.rerun()
 
-        with st.chat_message("assistant"):
-            with st.spinner("답변을 생성하는 중..."):
-                try:
-                    result = st.session_state.conversation({"question": query})
-                    response = result['answer']
-                    source_documents = result.get('source_documents', [])
+    with st.chat_message("assistant"):
+        with st.spinner("답변을 생성하는 중..."):
+            try:
+                result = st.session_state.conversation({"question": query})
+                response = result['answer']
+                source_documents = result.get('source_documents', [])
 
-                    st.write(response)
+                st.write(response)
 
-                    if source_documents:
-                        with st.expander("참고 문서"):
-                            for i, doc in enumerate(source
+                if source_documents:
+                    with st.expander("참고 문서"):
+                        for i, doc in enumerate(source_documents[:3], 1):
+                            st.markdown(f"**참고 {i}:** {doc.metadata.get('source', '알 수 없는 출처')}")
+                            st.markdown(f"```\n{doc.page_content[:200]}...\n```")
+
+                st.session_state.messages.append({"role": "assistant", "content": response})
+
+            except Exception as e:
+                error_message = f"답변 생성 중 오류가 발생했습니다: {str(e)}"
+                st.error(error_message)
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": error_message
+                })
+                logger.error(f"응답 생성 오류: {e}")
