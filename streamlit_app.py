@@ -5,8 +5,6 @@ import os
 import requests
 from loguru import logger
 import pickle
-import base64
-from github import Github
 from datetime import datetime
 
 from langchain.chains import ConversationalRetrievalChain
@@ -24,80 +22,38 @@ def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
     return api_key and len(api_key) > 20
 
-def validate_github_token(github_token):
-    """GitHub 토큰 검증"""
-    if not github_token:
-        return False
+def save_vectorstore_local(vectorstore, directory="vectorstore"):
+    """벡터 저장소를 로컬에 저장하는 함수"""
     try:
-        g = Github(github_token)
-        g.get_user().login
-        return True
-    except:
-        return False
-
-def save_vectorstore_to_github(vectorstore, github_token, repo_name="Dawol2205/chatbot_test", branch="main"):
-    """벡터 저장소를 GitHub에 저장하는 함수"""
-    try:
-        # 벡터 저장소를 바이트로 직렬화
-        serialized_vectorstore = pickle.dumps(vectorstore)
-        
-        # base64로 인코딩
-        encoded_content = base64.b64encode(serialized_vectorstore).decode()
-        
-        # GitHub API 연결
-        g = Github(github_token)
-        repo = g.get_repo(repo_name)
+        # 저장 디렉토리가 없으면 생성
+        if not os.path.exists(directory):
+            os.makedirs(directory)
         
         # 파일명 생성 (타임스탬프 포함)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_path = f"vector_db/vectorstore_{timestamp}.pkl"
+        file_path = os.path.join(directory, f"vectorstore_{timestamp}.pkl")
         
-        try:
-            # 기존 파일이 있는지 확인
-            contents = repo.get_contents(file_path, ref=branch)
-            # 파일이 존재하면 업데이트
-            repo.update_file(
-                file_path,
-                f"Update vector store {timestamp}",
-                encoded_content,
-                contents.sha,
-                branch=branch
-            )
-        except:
-            # 파일이 없으면 새로 생성
-            repo.create_file(
-                file_path,
-                f"Create vector store {timestamp}",
-                encoded_content,
-                branch=branch
-            )
+        # 벡터 저장소를 파일로 저장
+        with open(file_path, 'wb') as f:
+            pickle.dump(vectorstore, f)
         
         return True, file_path
         
     except Exception as e:
-        logger.error(f"GitHub 저장 오류: {e}")
+        logger.error(f"로컬 저장 오류: {e}")
         return False, str(e)
 
-def load_vectorstore_from_github(github_token, file_path, repo_name="Dawol2205/chatbot_test", branch="main"):
-    """GitHub에서 벡터 저장소를 불러오는 함수"""
+def load_vectorstore_local(file_path):
+    """로컬에서 벡터 저장소를 불러오는 함수"""
     try:
-        # GitHub API 연결
-        g = Github(github_token)
-        repo = g.get_repo(repo_name)
-        
-        # 파일 내용 가져오기
-        content = repo.get_contents(file_path, ref=branch)
-        
-        # base64 디코딩
-        decoded_content = base64.b64decode(content.content)
-        
-        # 벡터 저장소로 역직렬화
-        vectorstore = pickle.loads(decoded_content)
+        # 파일에서 벡터 저장소 불러오기
+        with open(file_path, 'rb') as f:
+            vectorstore = pickle.load(f)
         
         return True, vectorstore
         
     except Exception as e:
-        logger.error(f"GitHub 로드 오류: {e}")
+        logger.error(f"로컬 로드 오류: {e}")
         return False, str(e)
 
 def process_json(file_path):
@@ -238,11 +194,6 @@ def main():
         openai_api_key = st.text_input("OpenAI API Key", type="password")
         if not openai_api_key:
             st.info("API 키를 입력해주세요.", icon="🔑")
-            
-        # GitHub 토큰
-        github_token = st.text_input("GitHub Token", type="password")
-        if not github_token:
-            st.info("GitHub 토큰을 입력해주세요.", icon="🔑")
         
         # 문서 업로드 섹션
         st.header("문서 업로드")
@@ -257,39 +208,40 @@ def main():
         with col1:
             process_button = st.button("문서 처리")
         with col2:
-            save_github_button = st.button("GitHub에 저장")
-            
-        # GitHub 파일 선택기
-        st.header("벡터 DB 불러오기")
-        vector_file = st.text_input("벡터 파일 경로 (예: vector_db/example.pkl)")
-        if vector_file:
-            load_github_button = st.button("GitHub에서 불러오기")
+            save_local_button = st.button("벡터 저장")
+        
+        # 로컬 파일 업로더 추가
+        st.header("벡터 파일 불러오기")
+        local_file = st.file_uploader("벡터 파일 선택", type=["pkl"])
+        if local_file:
+            load_local_button = st.button("벡터 불러오기")
 
-    # GitHub에서 벡터 DB 불러오기
-    if vector_file and load_github_button:
+    # 로컬 파일 불러오기 버튼 처리
+    if local_file and load_local_button:
         if not validate_api_key(openai_api_key):
             st.error("유효한 OpenAI API 키를 입력해주세요.")
             st.stop()
-        
-        if not validate_github_token(github_token):
-            st.error("유효한 GitHub 토큰을 입력해주세요.")
-            st.stop()
 
         try:
-            with st.spinner("벡터 DB를 불러오는 중..."):
-                success, result = load_vectorstore_from_github(github_token, vector_file)
+            with st.spinner("벡터 저장소를 불러오는 중..."):
+                # 임시 파일로 저장
+                with open("temp_vector.pkl", "wb") as f:
+                    f.write(local_file.getvalue())
+                
+                # 벡터 저장소 불러오기
+                success, result = load_vectorstore_local("temp_vector.pkl")
                 
                 if success:
                     st.session_state.vectorstore = result
                     st.session_state.conversation = get_conversation_chain(result, openai_api_key)
                     st.session_state.processComplete = True
-                    st.success("벡터 DB를 성공적으로 불러왔습니다!")
+                    st.success("벡터 저장소를 성공적으로 불러왔습니다!")
                 else:
-                    st.error(f"벡터 DB 불러오기 실패: {result}")
+                    st.error(f"벡터 저장소 불러오기 실패: {result}")
                     
         except Exception as e:
-            st.error(f"벡터 DB 불러오기 중 오류 발생: {e}")
-            logger.error(f"GitHub 로드 오류: {e}")
+            st.error(f"벡터 파일 불러오기 중 오류 발생: {e}")
+            logger.error(f"로컬 로드 오류: {e}")
 
     # 문서 처리 로직
     if process_button:
@@ -344,38 +296,34 @@ def main():
             st.error(f"문서 처리 중 오류 발생: {str(e)}")
             logger.error(f"문서 처리 오류: {e}")
 
-    # GitHub에 벡터 저장소 저장
-        if save_github_button:
-            if not st.session_state.vectorstore:
-                st.error("저장할 벡터 데이터가 없습니다. 먼저 문서를 처리해주세요.")
-                st.stop()
-                
-            if not validate_github_token(github_token):
-                st.error("유효한 GitHub 토큰을 입력해주세요.")
-                st.stop()
-            
-            try:
-                with st.spinner("벡터 저장소를 GitHub에 저장하는 중..."):
-                    success, result = save_vectorstore_to_github(
-                        st.session_state.vectorstore,
-                        github_token
-                    )
-                    if success:
-                        st.success(f"벡터 저장소를 GitHub에 저장했습니다! (경로: {result})")
-                    else:
-                        st.error(f"벡터 저장소 저장 실패: {result}")
-            except Exception as e:
-                st.error(f"벡터 저장소 저장 중 오류 발생: {e}")
-                logger.error(f"GitHub 저장 오류: {e}")
+    # 벡터 저장소 로컬 저장
+    if save_local_button:
+        if not st.session_state.vectorstore:
+            st.error("저장할 벡터 데이터가 없습니다. 먼저 문서를 처리해주세요.")
+            st.stop()
+        
+        try:
+            with st.spinner("벡터 저장소를 저장하는 중..."):
+                success, result = save_vectorstore_local(
+                    st.session_state.vectorstore,
+                    directory="vectorstore"
+                )
+                if success:
+                    st.success(f"벡터 저장소를 저장했습니다! (경로: {result})")
+                else:
+                    st.error(f"벡터 저장소 저장 실패: {result}")
+        except Exception as e:
+            st.error(f"벡터 저장소 저장 중 오류 발생: {e}")
+            logger.error(f"저장 오류: {e}")
 
-        # 채팅 인터페이스
-        chat_container = st.container()
-        with chat_container:
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.write(message["content"])
+    # 채팅 인터페이스
+    chat_container = st.container()
+    with chat_container:
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
 
-        # 사용자 입력 처리
+    # 사용자 입력 처리
         if query := st.chat_input("질문을 입력하세요"):
             st.session_state.messages.append({"role": "user", "content": query})
             
