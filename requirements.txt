@@ -10,3 +10,4 @@ python-docx
 unstructured
 sentence-transformers
 torch
+openai
