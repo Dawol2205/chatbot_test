@@ -9,55 +9,120 @@ from datetime import datetime
 
 from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredPowerPointLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.memory import ConversationBufferMemory
-from langchain_community.vectorstores import FAISS
-from langchain_community.callbacks import get_openai_callback
-
-# GitHub 저장소 정보
-GITHUB_REPO = "K-MarkLee/AI_8_CH-3_LLM-RAG_AI_Utilizatioon_App"
-GITHUB_BRANCH = "Mark"
-GITHUB_PATH = "personal_work/이승열/food_db"
-FAISS_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{GITHUB_BRANCH}/{GITHUB_PATH}/index.faiss"
-PKL_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{GITHUB_BRANCH}/{GITHUB_PATH}/index.pkl"
+from langchain.vectorstores import FAISS
+from langchain.callbacks import get_openai_callback
+from langchain.document_loaders import TextLoader
+from langchain.docstore.document import Document
 
 def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
     return api_key and len(api_key) > 20
 
-def download_vector_store():
-    """GitHub에서 FAISS 벡터 저장소 다운로드"""
+def save_vectorstore_local(vectorstore, directory="vectorstore"):
+    """벡터 저장소를 로컬에 저장하는 함수"""
     try:
-        # FAISS 파일 다운로드
-        faiss_response = requests.get(FAISS_URL)
-        if faiss_response.status_code != 200:
-            return False, f"FAISS 파일 다운로드 실패: {faiss_response.status_code}"
-
-        # PKL 파일 다운로드
-        pkl_response = requests.get(PKL_URL)
-        if pkl_response.status_code != 200:
-            return False, f"PKL 파일 다운로드 실패: {pkl_response.status_code}"
-
-        # 임시 파일로 저장
-        with open("index.faiss", "wb") as f:
-            f.write(faiss_response.content)
-        with open("index.pkl", "wb") as f:
-            f.write(pkl_response.content)
-
-        # 임베딩 초기화
-        embeddings = HuggingFaceEmbeddings(
-            model_name="jhgan/ko-sroberta-multitask",
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
-        )
-
-        # FAISS 벡터 저장소 로드 (allow_dangerous_deserialization=True 추가)
-        vectorstore = FAISS.load_local(".", embeddings, allow_dangerous_deserialization=True)
-        return True, vectorstore
-
+        # 저장 디렉토리가 없으면 생성
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        
+        # 파일명 생성 (타임스탬프 포함)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = os.path.join(directory, f"vectorstore_{timestamp}.pkl")
+        
+        # 벡터 저장소를 파일로 저장
+        with open(file_path, 'wb') as f:
+            pickle.dump(vectorstore, f)
+        
+        return True, file_path
+        
     except Exception as e:
-        logger.error(f"벡터 저장소 다운로드 오류: {e}")
+        logger.error(f"로컬 저장 오류: {e}")
         return False, str(e)
+
+def load_vectorstore_local(file_path):
+    """로컬에서 벡터 저장소를 불러오는 함수"""
+    try:
+        # 파일에서 벡터 저장소 불러오기
+        with open(file_path, 'rb') as f:
+            vectorstore = pickle.load(f)
+        
+        return True, vectorstore
+        
+    except Exception as e:
+        logger.error(f"로컬 로드 오류: {e}")
+        return False, str(e)
+
+def process_json(file_path):
+    """JSON 파일을 처리하는 함수"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            data = json.load(file)
+        
+        # JSON 데이터를 문자열로 변환
+        text_content = json.dumps(data, ensure_ascii=False, indent=2)
+        
+        # Document 객체 생성
+        return [Document(
+            page_content=text_content,
+            metadata={"source": file_path}
+        )]
+    except Exception as e:
+        logger.error(f"JSON 파일 처리 중 오류 발생: {e}")
+        return []
+
+def tiktoken_len(text):
+    """텍스트의 토큰 길이 계산 함수"""
+    tokenizer = tiktoken.get_encoding("cl100k_base")
+    tokens = tokenizer.encode(text)
+    return len(tokens)
+
+def get_text(docs):
+    """업로드된 문서에서 텍스트 추출하는 함수"""
+    doc_list = []
+    
+    for doc in docs:
+        try:
+            # 문서 저장
+            file_name = doc.name
+            with open(file_name, "wb") as file:
+                file.write(doc.getvalue())
+                logger.info(f"업로드된 파일: {file_name}")
+
+            # 파일 유형에 따라 로더 선택
+            if '.pdf' in doc.name.lower():
+                loader = PyPDFLoader(file_name)
+                documents = loader.load_and_split()
+            elif '.docx' in doc.name.lower():
+                loader = Docx2txtLoader(file_name)
+                documents = loader.load_and_split()
+            elif '.pptx' in doc.name.lower():
+                loader = UnstructuredPowerPointLoader(file_name)
+                documents = loader.load_and_split()
+            elif '.json' in doc.name.lower():
+                documents = process_json(file_name)
+            else:
+                continue
+
+            doc_list.extend(documents)
+        except Exception as e:
+            logger.error(f"문서 처리 중 오류 발생: {file_name}, 오류: {e}")
+            continue
+            
+    return doc_list
+
+def get_text_chunks(text):
+    """텍스트를 일정 크기의 청크로 분할하는 함수"""
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=900,
+        chunk_overlap=100,
+        length_function=tiktoken_len
+    )
+    chunks = text_splitter.split_documents(text)
+    return chunks
 
 def get_conversation_chain(vectorstore, openai_api_key):
     """대화 체인 생성 함수"""
@@ -82,11 +147,11 @@ def get_conversation_chain(vectorstore, openai_api_key):
 def main():
     # 페이지 설정
     st.set_page_config(
-        page_title="요리 도우미 V3",
+        page_title="요리 도우미",
         page_icon="🍳"
     )
 
-    st.title("요리 도우미 V3 🍳")
+    st.title("요리 도우미 🍳")
 
     # 세션 상태 초기화
     if "conversation" not in st.session_state:
@@ -110,31 +175,114 @@ def main():
         openai_api_key = st.text_input("OpenAI API Key", type="password")
         if not openai_api_key:
             st.info("API 키를 입력해주세요.", icon="🔑")
-            
-        # 벡터 DB 로드 버튼
-        load_button = st.button("벡터 DB 로드")
+        
+        # 문서 업로드 섹션
+        st.header("문서 업로드")
+        uploaded_files = st.file_uploader(
+            "요리 관련 문서 업로드",
+            type=["pdf", "docx", "pptx", "json"],
+            accept_multiple_files=True
+        )
+        
+        # 버튼들을 2열로 배치
+        col1, col2 = st.columns(2)
+        with col1:
+            process_button = st.button("문서 처리")
+        with col2:
+            save_local_button = st.button("벡터 저장")
+        
+        # 로컬 파일 업로더 추가
+        st.header("벡터 파일 불러오기")
+        local_file = st.file_uploader("벡터 파일 선택", type=["pkl"])
+        if local_file:
+            load_local_button = st.button("벡터 불러오기")
 
-    # 벡터 DB 로드
-    if load_button:
+    # 로컬 파일 불러오기 버튼 처리
+    if local_file and load_local_button:
         if not validate_api_key(openai_api_key):
             st.error("유효한 OpenAI API 키를 입력해주세요.")
             st.stop()
 
         try:
-            with st.spinner("벡터 DB를 불러오는 중..."):
-                success, result = download_vector_store()
+            with st.spinner("벡터 저장소를 불러오는 중..."):
+                # 임시 파일로 저장
+                with open("temp_vector.pkl", "wb") as f:
+                    f.write(local_file.getvalue())
+                
+                # 벡터 저장소 불러오기
+                success, result = load_vectorstore_local("temp_vector.pkl")
                 
                 if success:
                     st.session_state.vectorstore = result
                     st.session_state.conversation = get_conversation_chain(result, openai_api_key)
                     st.session_state.processComplete = True
-                    st.success("벡터 DB를 성공적으로 불러왔습니다!")
+                    st.success("벡터 저장소를 성공적으로 불러왔습니다!")
                 else:
-                    st.error(f"벡터 DB 불러오기 실패: {result}")
+                    st.error(f"벡터 저장소 불러오기 실패: {result}")
                     
         except Exception as e:
-            st.error(f"벡터 DB 불러오기 중 오류 발생: {e}")
-            logger.error(f"벡터 DB 로드 오류: {e}")
+            st.error(f"벡터 파일 불러오기 중 오류 발생: {e}")
+            logger.error(f"로컬 로드 오류: {e}")
+
+    # 문서 처리 로직
+    if process_button:
+        if not validate_api_key(openai_api_key):
+            st.error("유효한 OpenAI API 키를 입력해주세요.")
+            st.stop()
+        
+        if not uploaded_files:
+            st.warning("처리할 문서를 업로드해주세요.")
+            st.stop()
+
+        try:
+            with st.spinner("문서를 처리하는 중..."):
+                # 문서에서 텍스트 추출
+                docs = get_text(uploaded_files)
+                
+                # 텍스트 청크 생성
+                chunks = get_text_chunks(docs)
+                
+                # 임베딩 생성
+                embeddings = HuggingFaceEmbeddings(
+                    model_name="jhgan/ko-sroberta-multitask",
+                    model_kwargs={'device': 'cpu'},
+                    encode_kwargs={'normalize_embeddings': True}
+                )
+                
+                # 벡터 저장소 생성
+                vectorstore = FAISS.from_documents(documents=chunks, embedding=embeddings)
+                
+                # 세션에 벡터 저장소 저장
+                st.session_state.vectorstore = vectorstore
+                
+                # 대화 체인 초기화
+                st.session_state.conversation = get_conversation_chain(vectorstore, openai_api_key)
+                st.session_state.processComplete = True
+                st.success("문서 처리 완료!")
+
+        except Exception as e:
+            st.error(f"문서 처리 중 오류 발생: {e}")
+            logger.error(f"문서 처리 오류: {e}")
+
+    # 벡터 저장소 로컬 저장
+    if save_local_button:
+        if not st.session_state.vectorstore:
+            st.error("저장할 벡터 데이터가 없습니다. 먼저 문서를 처리해주세요.")
+            st.stop()
+        
+        try:
+            with st.spinner("벡터 저장소를 저장하는 중..."):
+                success, result = save_vectorstore_local(
+                    st.session_state.vectorstore,
+                    directory="vectorstore"
+                )
+                if success:
+                    st.success(f"벡터 저장소를 저장했습니다! (경로: {result})")
+                else:
+                    st.error(f"벡터 저장소 저장 실패: {result}")
+        except Exception as e:
+            st.error(f"벡터 저장소 저장 중 오류 발생: {e}")
+            logger.error(f"저장 오류: {e}")
 
     # 채팅 인터페이스
     chat_container = st.container()
@@ -151,10 +299,10 @@ def main():
             st.write(query)
 
         if not st.session_state.conversation:
-            st.warning("먼저 벡터 DB를 불러와주세요.")
+            st.warning("먼저 문서를 처리하거나 벡터 저장소를 불러와주세요.")
             st.session_state.messages.append({
                 "role": "assistant", 
-                "content": "죄송합니다. 먼저 벡터 DB를 불러와주세요."
+                "content": "죄송합니다. 먼저 요리 관련 문서를 업로드하거나 기존 벡터 저장소를 불러와주세요."
             })
             st.rerun()
 
