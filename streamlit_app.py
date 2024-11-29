@@ -1,3 +1,4 @@
+from github import Github
 import streamlit as st
 import tiktoken
 import json
@@ -6,7 +7,6 @@ import requests
 from loguru import logger
 import pickle
 import base64
-from github import Github
 from datetime import datetime
 
 from langchain.chains import ConversationalRetrievalChain
@@ -208,6 +208,11 @@ def get_conversation_chain(vectorstore, openai_api_key):
     return conversation_chain
 
 def main():
+    # Streamlit 설정 초기화
+    if 'initialized' not in st.session_state:
+        st.session_state.initialized = True
+        st.rerun()
+
     # 페이지 설정
     st.set_page_config(
         page_title="요리 도우미",
@@ -344,7 +349,7 @@ def main():
             st.error(f"문서 처리 중 오류 발생: {str(e)}")
             logger.error(f"문서 처리 오류: {e}")
 
-    # GitHub에 벡터 저장소 저장
+# GitHub에 벡터 저장소 저장
     if save_github_button:
         if not st.session_state.vectorstore:
             st.error("저장할 벡터 데이터가 없습니다. 먼저 문서를 처리해주세요.")
