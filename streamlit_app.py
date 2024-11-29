@@ -86,12 +86,18 @@ def get_text(docs):
     
     for doc in docs:
         try:
+            # 문서가 비어있는지 확인
+            if doc is None or doc.size == 0:
+                logger.warning(f"빈 문서가 감지됨: {doc.name if doc else 'Unknown'}")
+                continue
+
             # 문서 저장
             file_name = doc.name
             with open(file_name, "wb") as file:
                 file.write(doc.getvalue())
                 logger.info(f"업로드된 파일: {file_name}")
 
+            documents = []
             # 파일 유형에 따라 로더 선택
             if '.pdf' in doc.name.lower():
                 loader = PyPDFLoader(file_name)
@@ -104,13 +110,26 @@ def get_text(docs):
                 documents = loader.load_and_split()
             elif '.json' in doc.name.lower():
                 documents = process_json(file_name)
-            else:
-                continue
 
-            doc_list.extend(documents)
+            # 문서가 성공적으로 로드되었는지 확인
+            if documents:
+                doc_list.extend(documents)
+            else:
+                logger.warning(f"문서에서 텍스트를 추출할 수 없음: {file_name}")
+
+            # 임시 파일 삭제
+            try:
+                os.remove(file_name)
+            except Exception as e:
+                logger.warning(f"임시 파일 삭제 실패: {file_name}, 오류: {e}")
+
         except Exception as e:
-            logger.error(f"문서 처리 중 오류 발생: {file_name}, 오류: {e}")
+            logger.error(f"문서 처리 중 오류 발생: {getattr(doc, 'name', 'Unknown')}, 오류: {e}")
             continue
+    
+    # 최종 결과 확인
+    if not doc_list:
+        raise ValueError("처리할 수 있는 문서가 없습니다. 문서를 확인해주세요.")
             
     return doc_list
 
