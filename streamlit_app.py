@@ -3,6 +3,8 @@ import logging
 import pickle
 import base64
 import requests
+import json
+import os
 from github import Github
 from datetime import datetime
 
@@ -10,44 +12,70 @@ from langchain_openai import ChatOpenAI
 from langchain.chains.conversational_retrieval.base import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 from langchain_community.vectorstores import FAISS
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain.docstore.document import Document
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# GitHub 저장소 정보
-GITHUB_REPO = "Dawol2205/chatbot_test"
-GITHUB_BRANCH = "main"
-VECTOR_PATH = "vector_store"  # 벡터 저장소가 있는 디렉토리
-
 def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
     return api_key and len(api_key) > 20
 
-def get_github_file_content(token, repo_name, file_path, branch="main"):
-    """GitHub에서 파일 내용 가져오기"""
+def process_json(file):
+    """JSON 파일을 처리하는 함수"""
     try:
-        g = Github(token)
-        repo = g.get_repo(repo_name)
-        content = repo.get_contents(file_path, ref=branch)
+        content = file.getvalue().decode('utf-8')
+        data = json.loads(content)
         
-        decoded_content = base64.b64decode(content.content)
-        return True, decoded_content
+        # JSON 데이터를 문자열로 변환
+        text_content = json.dumps(data, ensure_ascii=False, indent=2)
+        
+        # Document 객체 생성
+        return [Document(
+            page_content=text_content,
+            metadata={"source": file.name}
+        )]
     except Exception as e:
-        logger.error(f"GitHub 파일 로드 오류: {e}")
-        return False, str(e)
+        logger.error(f"JSON 파일 처리 중 오류 발생: {e}")
+        return []
 
-def load_vector_store(github_token, filepath):
-    """GitHub에서 벡터 저장소 로드"""
+def get_text_chunks(documents):
+    """텍스트를 청크로 분할"""
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=900,
+        chunk_overlap=100
+    )
+    return text_splitter.split_documents(documents)
+
+def create_vector_store(documents):
+    """벡터 저장소 생성"""
+    embeddings = HuggingFaceEmbeddings(
+        model_name="jhgan/ko-sroberta-multitask",
+        model_kwargs={'device': 'cpu'},
+        encode_kwargs={'normalize_embeddings': True}
+    )
+    
+    return FAISS.from_documents(documents=documents, embedding=embeddings)
+
+def save_vector_store(vectorstore, directory="vector_store"):
+    """벡터 저장소를 로컬에 저장"""
     try:
-        success, content = get_github_file_content(github_token, GITHUB_REPO, filepath, GITHUB_BRANCH)
-        if success:
-            vectorstore = pickle.loads(content)
-            return True, vectorstore
-        else:
-            return False, content
+        # 저장 디렉토리가 없으면 생성
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        
+        file_path = os.path.join(directory, "index.pkl")
+        
+        # 벡터 저장소를 파일로 저장
+        with open(file_path, 'wb') as f:
+            pickle.dump(vectorstore, f)
+        
+        return True, file_path
     except Exception as e:
-        logger.error(f"벡터 저장소 로드 오류: {e}")
+        logger.error(f"저장 오류: {e}")
         return False, str(e)
 
 def get_conversation_chain(vectorstore, openai_api_key):
@@ -79,10 +107,6 @@ def main():
             layout="wide"
         )
 
-        if 'initialized' not in st.session_state:
-            st.session_state.initialized = True
-            st.rerun()
-
         st.title("요리 도우미 🍳")
 
         # 세션 상태 초기화
@@ -104,32 +128,63 @@ def main():
             if not openai_api_key:
                 st.info("OpenAI API 키를 입력해주세요.", icon="🔑")
 
-            # GitHub 토큰 입력
-            github_token = st.text_input("GitHub Token", type="password")
-            if not github_token:
-                st.info("GitHub 토큰을 입력해주세요.", icon="🔑")
+            # JSON 파일 업로드
+            st.header("JSON 파일 업로드")
+            uploaded_file = st.file_uploader("JSON 파일 선택", type=["json"])
+            
+            # 처리 버튼들
+            col1, col2 = st.columns(2)
+            with col1:
+                process_button = st.button("파일 처리")
+            with col2:
+                save_button = st.button("벡터 저장")
 
-            # 벡터 DB 로드 버튼
-            if st.button("벡터 DB 로드"):
-                if not validate_api_key(openai_api_key):
-                    st.error("유효한 OpenAI API 키를 입력해주세요.")
-                    st.stop()
+        # JSON 파일 처리
+        if uploaded_file and process_button:
+            if not validate_api_key(openai_api_key):
+                st.error("유효한 OpenAI API 키를 입력해주세요.")
+                st.stop()
 
-                try:
-                    with st.spinner("벡터 DB를 불러오는 중..."):
-                        # 벡터 저장소 불러오기
-                        success, result = load_vector_store(github_token, f"{VECTOR_PATH}/index.pkl")
-                        
-                        if success:
-                            st.session_state.vectorstore = result
-                            st.session_state.conversation = get_conversation_chain(result, openai_api_key)
-                            st.success("벡터 DB를 성공적으로 불러왔습니다!")
-                        else:
-                            st.error(f"벡터 DB 불러오기 실패: {result}")
-                            
-                except Exception as e:
-                    st.error(f"벡터 DB 불러오기 중 오류 발생: {e}")
-                    logger.error(f"벡터 DB 로드 오류: {e}")
+            try:
+                with st.spinner("JSON 파일 처리 중..."):
+                    # JSON 처리
+                    documents = process_json(uploaded_file)
+                    if not documents:
+                        st.error("JSON 파일 처리에 실패했습니다.")
+                        st.stop()
+                    
+                    # 청크 생성
+                    chunks = get_text_chunks(documents)
+                    
+                    # 벡터 저장소 생성
+                    vectorstore = create_vector_store(chunks)
+                    
+                    # 세션에 저장
+                    st.session_state.vectorstore = vectorstore
+                    st.session_state.conversation = get_conversation_chain(vectorstore, openai_api_key)
+                    st.success("JSON 파일 처리 완료!")
+
+            except Exception as e:
+                st.error(f"파일 처리 중 오류 발생: {str(e)}")
+                logger.error(f"처리 오류: {e}")
+
+        # 벡터 저장소 저장
+        if save_button:
+            if not st.session_state.vectorstore:
+                st.error("저장할 벡터 데이터가 없습니다. 먼저 JSON 파일을 처리해주세요.")
+                st.stop()
+
+            try:
+                with st.spinner("벡터 저장소 저장 중..."):
+                    success, result = save_vector_store(st.session_state.vectorstore)
+                    if success:
+                        st.success(f"벡터 저장소를 저장했습니다! (경로: {result})")
+                    else:
+                        st.error(f"저장 실패: {result}")
+
+            except Exception as e:
+                st.error(f"저장 중 오류 발생: {str(e)}")
+                logger.error(f"저장 오류: {e}")
 
         # 채팅 인터페이스
         chat_container = st.container()
@@ -146,10 +201,10 @@ def main():
                 st.write(query)
 
             if not st.session_state.conversation:
-                st.warning("먼저 벡터 DB를 불러와주세요.")
+                st.warning("먼저 JSON 파일을 처리해주세요.")
                 st.session_state.messages.append({
                     "role": "assistant", 
-                    "content": "죄송합니다. 먼저 벡터 DB를 불러와주세요."
+                    "content": "죄송합니다. 먼저 JSON 파일을 업로드하고 처리해주세요."
                 })
                 st.rerun()
 
