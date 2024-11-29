@@ -1,14 +1,8 @@
 import streamlit as st
 import tiktoken
 import json
-import os
-import requests
 from loguru import logger
 from concurrent import futures
-import pickle
-import base64
-from github import Github
-from datetime import datetime
 
 from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
@@ -25,71 +19,133 @@ def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
     return api_key and len(api_key) > 20
 
-def save_vectorstore_to_github(vectorstore, github_token, repo_name, branch="main"):
-    """벡터 저장소를 GitHub에 저장하는 함수"""
-    try:
-        # 벡터 저장소를 바이트로 직렬화
-        serialized_vectorstore = pickle.dumps(vectorstore)
-        
-        # base64로 인코딩
-        encoded_content = base64.b64encode(serialized_vectorstore).decode()
-        
-        # GitHub API 연결
-        g = Github(github_token)
-        repo = g.get_user().get_repo(repo_name)
-        
-        # 파일명 생성 (타임스탬프 포함)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_path = f"vectorstore/vectorstore_{timestamp}.pkl"
-        
-        try:
-            # 기존 파일이 있는지 확인
-            contents = repo.get_contents(file_path, ref=branch)
-            # 파일이 존재하면 업데이트
-            repo.update_file(
-                file_path,
-                f"Update vector store {timestamp}",
-                encoded_content,
-                contents.sha,
-                branch=branch
-            )
-        except:
-            # 파일이 없으면 새로 생성
-            repo.create_file(
-                file_path,
-                f"Create vector store {timestamp}",
-                encoded_content,
-                branch=branch
-            )
-        
-        # 성공 메시지 반환
-        return True, file_path
-        
-    except Exception as e:
-        logger.error(f"GitHub 저장 오류: {e}")
-        return False, str(e)
+def main():
+    # 페이지 설정: 제목과 아이콘 지정
+    st.set_page_config(
+        page_title="요리 도우미",
+        page_icon="🍳"
+    )
 
-def load_vectorstore_from_github(github_token, repo_name, file_path, branch="main"):
-    """GitHub에서 벡터 저장소를 불러오는 함수"""
-    try:
-        # GitHub API 연결
-        g = Github(github_token)
-        repo = g.get_user().get_repo(repo_name)
+    # 앱 제목 설정
+    st.title("요리 도우미 🍳")
+
+    # 세션 상태 초기화
+    if "conversation" not in st.session_state:
+        st.session_state.conversation = None
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = None
+    if "processComplete" not in st.session_state:
+        st.session_state.processComplete = False
+    if 'messages' not in st.session_state:
+        st.session_state['messages'] = [
+            {"role": "assistant", "content": "안녕하세요! 요리 도우미입니다. 어떤 요리에 대해 알고 싶으신가요?"}
+        ]
+
+    # 사이드바 생성
+    with st.sidebar:
+        # 문서 업로드 기능
+        uploaded_files = st.file_uploader(
+            "요리 관련 문서 업로드", 
+            type=["pdf", "docx", "pptx", "json"],
+            accept_multiple_files=True
+        )
         
-        # 파일 내용 가져오기
-        content = repo.get_contents(file_path, ref=branch)
+        # OpenAI API 키 입력 필드
+        openai_api_key = st.text_input("OpenAI API Key", type="password")
+        if not openai_api_key:
+            st.info("API 키를 입력해주세요.", icon="🔑")
         
-        # base64 디코딩
-        decoded_content = base64.b64decode(content.content)
+        # 문서 처리 버튼
+        process_button = st.button("문서 처리")
+
+    # 문서 처리 로직
+    if process_button:
+        if not validate_api_key(openai_api_key):
+            st.error("유효한 API 키를 입력해주세요.")
+            st.stop()
         
-        # 벡터 저장소로 역직렬화
-        vectorstore = pickle.loads(decoded_content)
+        if not uploaded_files:
+            st.warning("처리할 문서를 업로드해주세요.")
+            st.stop()
+
+        try:
+            with st.spinner("문서를 처리하는 중..."):
+                # 문서에서 텍스트 추출
+                docs = get_text(uploaded_files)
+                
+                # 텍스트 청크 생성
+                chunks = get_text_chunks(docs)
+                
+                # 임베딩 생성
+                embeddings = HuggingFaceEmbeddings(
+                    model_name="jhgan/ko-sroberta-multitask",
+                    model_kwargs={'device': 'cpu'},
+                    encode_kwargs={'normalize_embeddings': True}
+                )
+                
+                # 벡터 저장소 생성
+                vectorstore = FAISS.from_documents(documents=chunks, embedding=embeddings)
+                
+                # 대화 체인 초기화
+                st.session_state.conversation = get_conversation_chain(vectorstore, openai_api_key)
+                st.session_state.processComplete = True
+                st.success("문서 처리 완료!")
+
+        except Exception as e:
+            st.error(f"문서 처리 중 오류 발생: {e}")
+            logger.error(f"문서 처리 오류: {e}")
+
+    # 채팅 인터페이스
+    chat_container = st.container()
+    with chat_container:
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
+
+    # 사용자 입력 처리
+    if query := st.chat_input("질문을 입력하세요"):
+        # 사용자 메시지를 대화 히스토리에 추가
+        st.session_state.messages.append({"role": "user", "content": query})
         
-        return True, vectorstore
-        
-    except Exception as e:
-        logger.error(f"GitHub 로드 오류: {e}")
-        return False, str(e)
+        with st.chat_message("user"):
+            st.write(query)
+
+        # 대화 체인 준비 상태 확인
+        if not st.session_state.conversation:
+            st.warning("먼저 문서를 처리해주세요.")
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": "죄송합니다. 먼저 요리 관련 문서를 업로드하고 처리해주세요."
+            })
+            st.rerun()
+
+        # 질의 처리
+        with st.chat_message("assistant"):
+            with st.spinner("답변을 생성하는 중..."):
+                try:
+                    result = st.session_state.conversation({"question": query})
+                    response = result['answer']
+                    source_documents = result.get('source_documents', [])
+
+                    st.write(response)
+
+                    if source_documents:
+                        with st.expander("참고 문서"):
+                            for i, doc in enumerate(source_documents[:3], 1):
+                                st.markdown(f"**참고 {i}:** {doc.metadata.get('source', '알 수 없는 출처')}")
+                                st.markdown(f"```\n{doc.page_content[:200]}...\n```")
+
+                    # 어시스턴트 응답을 대화 히스토리에 추가
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+
+                except Exception as e:
+                    error_message = f"답변 생성 중 오류가 발생했습니다: {str(e)}"
+                    st.error(error_message)
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": error_message
+                    })
+                    logger.error(f"응답 생성 오류: {e}")
 
 def process_json(file_path):
     """JSON 파일을 처리하는 함수"""
@@ -181,193 +237,5 @@ def get_conversation_chain(vectorstore, openai_api_key):
 
     return conversation_chain
 
-def main():
-    # 페이지 설정
-    st.set_page_config(
-        page_title="요리 도우미",
-        page_icon="🍳"
-    )
-
-    st.title("요리 도우미 🍳")
-
-    # 세션 상태 초기화
-    if "conversation" not in st.session_state:
-        st.session_state.conversation = None
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = None
-    if "processComplete" not in st.session_state:
-        st.session_state.processComplete = False
-    if 'messages' not in st.session_state:
-        st.session_state['messages'] = [
-            {"role": "assistant", "content": "안녕하세요! 요리 도우미입니다. 어떤 요리에 대해 알고 싶으신가요?"}
-        ]
-    if 'vectorstore_path' not in st.session_state:
-        st.session_state.vectorstore_path = None
-
-    # 사이드바 생성
-    with st.sidebar:
-        st.header("설정")
-        
-        # GitHub 설정
-        github_token = st.text_input("GitHub Token", type="password")
-        repo_name = st.text_input("Repository Name", "AI_8_CH-3_LLM-RAG_AI_Utilizatioon_App")
-        
-        # 문서 업로드 섹션
-        st.header("문서 업로드")
-        uploaded_files = st.file_uploader(
-            "요리 관련 문서 업로드",
-            type=["pdf", "docx", "pptx", "json"],
-            accept_multiple_files=True
-        )
-        
-        # OpenAI API 키
-        openai_api_key = st.text_input("OpenAI API Key", type="password")
-        if not openai_api_key:
-            st.info("API 키를 입력해주세요.", icon="🔑")
-        
-        # 문서 처리 버튼
-        col1, col2 = st.columns(2)
-        with col1:
-            process_button = st.button("문서 처리")
-        with col2:
-            load_button = st.button("벡터 불러오기")
-
-    # 벡터 저장소 불러오기
-    if load_button:
-        if not github_token:
-            st.error("GitHub 토큰을 입력해주세요.")
-            st.stop()
-            
-        if not validate_api_key(openai_api_key):
-            st.error("유효한 OpenAI API 키를 입력해주세요.")
-            st.stop()
-
-        try:
-            with st.spinner("벡터 저장소를 불러오는 중..."):
-                # 가장 최근 벡터 저장소 파일 찾기
-                g = Github(github_token)
-                repo = g.get_user().get_repo(repo_name)
-                contents = repo.get_contents("vectorstore", ref="main")
-                latest_file = max(contents, key=lambda c: c.path)
-                
-                # 벡터 저장소 불러오기
-                success, result = load_vectorstore_from_github(
-                    github_token,
-                    repo_name,
-                    latest_file.path
-                )
-                
-                if success:
-                    vectorstore = result
-                    st.session_state.conversation = get_conversation_chain(vectorstore, openai_api_key)
-                    st.session_state.processComplete = True
-                    st.session_state.vectorstore_path = latest_file.path
-                    st.success(f"벡터 저장소를 성공적으로 불러왔습니다! (파일: {latest_file.path})")
-                else:
-                    st.error(f"벡터 저장소 불러오기 실패: {result}")
-                    
-        except Exception as e:
-            st.error(f"벡터 저장소 불러오기 중 오류 발생: {e}")
-            logger.error(f"벡터 저장소 불러오기 오류: {e}")
-
-    # 문서 처리 로직
-    if process_button:
-        if not validate_api_key(openai_api_key):
-            st.error("유효한 API 키를 입력해주세요.")
-            st.stop()
-        
-        if not uploaded_files:
-            st.warning("처리할 문서를 업로드해주세요.")
-            st.stop()
-            
-        if not github_token:
-            st.error("GitHub 토큰을 입력해주세요.")
-            st.stop()
-
-        try:
-            with st.spinner("문서를 처리하는 중..."):
-                # 문서에서 텍스트 추출
-                docs = get_text(uploaded_files)
-                
-                # 텍스트 청크 생성
-                chunks = get_text_chunks(docs)
-                
-                # 임베딩 생성
-                embeddings = HuggingFaceEmbeddings(
-                    model_name="jhgan/ko-sroberta-multitask",
-                    model_kwargs={'device': 'cpu'},
-                    encode_kwargs={'normalize_embeddings': True}
-                )
-                
-                # 벡터 저장소 생성
-                vectorstore = FAISS.from_documents(documents=chunks, embedding=embeddings)
-                
-                # GitHub에 벡터 저장소 저장
-                success, result = save_vectorstore_to_github(
-                    vectorstore,
-                    github_token,
-                    repo_name
-                )
-                
-                if success:
-                    st.session_state.vectorstore_path = result
-                    st.success(f"벡터 저장소를 GitHub에 저장했습니다! (경로: {result})")
-                else:
-                    st.warning(f"벡터 저장소 저장 실패: {result}")
-                
-                # 대화 체인 초기화
-                st.session_state.conversation = get_conversation_chain(vectorstore, openai_api_key)
-                st.session_state.processComplete = True
-                st.success("문서 처리 완료!")
-
-        except Exception as e:
-            st.error(f"문서 처리 중 오류 발생: {e}")
-            logger.error(f"문서 처리 오류: {e}")
-
-    # 채팅 인터페이스
-    chat_container = st.container()
-    with chat_container:
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.write(message["content"])
-
-# 사용자 입력 처리
-    if query := st.chat_input("질문을 입력하세요"):
-        st.session_state.messages.append({"role": "user", "content": query})
-    
-        with st.chat_message("user"):
-            st.write(query)
-
-        if not st.session_state.conversation:
-            st.warning("먼저 문서를 처리하거나 벡터 저장소를 불러와주세요.")
-            st.session_state.messages.append({
-                "role": "assistant", 
-                "content": "죄송합니다. 먼저 요리 관련 문서를 업로드하거나 기존 벡터 저장소를 불러와주세요."
-        })
-        st.rerun()
-
-        with st.chat_message("assistant"):
-            with st.spinner("답변을 생성하는 중..."):
-                try:
-                    result = st.session_state.conversation({"question": query})
-                    response = result['answer']
-                    source_documents = result.get('source_documents', [])
-
-                    st.write(response)
-
-                    if source_documents:
-                        with st.expander("참고 문서"):
-                            for i, doc in enumerate(source_documents[:3], 1):
-                                st.markdown(f"**참고 {i}:** {doc.metadata.get('source', '알 수 없는 출처')}")
-                                st.markdown(f"```\n{doc.page_content[:200]}...\n```")
-
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-
-                except Exception as e:
-                    error_message = f"답변 생성 중 오류가 발생했습니다: {str(e)}"
-                    st.error(error_message)
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": error_message
-                })
-                    logger.error(f"응답 생성 오류: {e}")
+if __name__ == '__main__':
+    main()
