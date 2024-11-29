@@ -25,6 +25,19 @@ GITHUB_REPO = "Dawol2205/chatbot_test"
 GITHUB_BRANCH = "main"
 VECTOR_PATH = "vector_store"
 
+def initialize_session_state():
+    """세션 상태 초기화"""
+    if "initialized" not in st.session_state:
+        st.session_state.initialized = True
+    if "conversation" not in st.session_state:
+        st.session_state.conversation = None
+    if "messages" not in st.session_state:
+        st.session_state.messages = [
+            {"role": "assistant", "content": "안녕하세요! 요리 도우미입니다. 어떤 요리에 대해 알고 싶으신가요?"}
+        ]
+    if "vectorstore" not in st.session_state:
+        st.session_state.vectorstore = None
+
 def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
     return api_key and len(api_key) > 20
@@ -166,19 +179,6 @@ def main():
         initialize_session_state()
 
         st.title("요리 도우미 🍳")
-
-        def initialize_session_state():
-            """세션 상태 초기화"""
-            if "initialized" not in st.session_state:
-                st.session_state.initialized = True
-            if "conversation" not in st.session_state:
-                st.session_state.conversation = None
-            if "messages" not in st.session_state:
-                st.session_state.messages = [
-                    {"role": "assistant", "content": "안녕하세요! 요리 도우미입니다. 어떤 요리에 대해 알고 싶으신가요?"}
-                ]
-            if "vectorstore" not in st.session_state:
-                st.session_state.vectorstore = None
 
         # 사이드바 설정
         with st.sidebar:
