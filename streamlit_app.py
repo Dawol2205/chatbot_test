@@ -9,16 +9,17 @@ import pickle
 import base64
 from datetime import datetime
 
-from langchain.chains import ConversationalRetrievalChain
-from langchain.chat_models import ChatOpenAI
-from langchain.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredPowerPointLoader
+# Updated LangChain imports
+from langchain_community.chat_models import ChatOpenAI
+from langchain_community.chains import ConversationalRetrievalChain
+from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredPowerPointLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.memory import ConversationBufferMemory
-from langchain.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS
 from langchain.callbacks import get_openai_callback
-from langchain.document_loaders import TextLoader
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
+
 
 def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
