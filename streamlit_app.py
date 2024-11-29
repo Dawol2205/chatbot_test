@@ -51,8 +51,8 @@ def download_vector_store():
             encode_kwargs={'normalize_embeddings': True}
         )
 
-        # FAISS 벡터 저장소 로드
-        vectorstore = FAISS.load_local(".", embeddings)
+        # FAISS 벡터 저장소 로드 (allow_dangerous_deserialization=True 추가)
+        vectorstore = FAISS.load_local(".", embeddings, allow_dangerous_deserialization=True)
         return True, vectorstore
 
     except Exception as e:
