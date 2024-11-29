@@ -323,7 +323,7 @@ def main():
             with st.chat_message(message["role"]):
                 st.write(message["content"])
 
-    # 사용자 입력 처리
+# 사용자 입력 처리
     if query := st.chat_input("질문을 입력하세요"):
         st.session_state.messages.append({"role": "user", "content": query})
         
@@ -343,7 +343,9 @@ def main():
                 try:
                     result = st.session_state.conversation({"question": query})
                     response = result['answer']
-                    source_documents = result.
+                    source_documents = result.get('source_documents', [])
+
+                    st.write(response)
 
                     if source_documents:
                         with st.expander("참고 문서"):
