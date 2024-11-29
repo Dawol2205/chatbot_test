@@ -3,6 +3,7 @@ PyGithub
 tiktoken
 loguru
 faiss-cpu
+langchain-core
 langchain
 langchain-community
 PyPDF2
