@@ -7,12 +7,13 @@ from loguru import logger
 import pickle
 from datetime import datetime
 
-from langchain.chains import ConversationalRetrievalChain
-from langchain.chat_models import ChatOpenAI
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.memory import ConversationBufferMemory
-from langchain.vectorstores import FAISS
-from langchain.callbacks import get_openai_callback
+# Updated LangChain imports
+from langchain_community.chains import ConversationalRetrievalChain
+from langchain_openai import ChatOpenAI
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_core.memory import ConversationBufferMemory
+from langchain_community.vectorstores import FAISS
+from langchain_community.callbacks import get_openai_callback
 
 # GitHub 저장소 정보
 GITHUB_REPO = "K-MarkLee/AI_8_CH-3_LLM-RAG_AI_Utilizatioon_App"
