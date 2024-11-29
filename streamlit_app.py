@@ -4,48 +4,59 @@ import json
 import os
 import requests
 from loguru import logger
-from concurrent import futures
 import pickle
 from datetime import datetime
 
 from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
-from langchain.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredPowerPointLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.memory import ConversationBufferMemory
 from langchain.vectorstores import FAISS
 from langchain.callbacks import get_openai_callback
-from langchain.document_loaders import TextLoader
-from langchain.docstore.document import Document
 
 # GitHub 저장소 정보
 GITHUB_REPO = "K-MarkLee/AI_8_CH-3_LLM-RAG_AI_Utilizatioon_App"
 GITHUB_BRANCH = "Mark"
 GITHUB_PATH = "personal_work/이승열/food_db"
-VECTOR_DB_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{GITHUB_BRANCH}/{GITHUB_PATH}/food_vector_store.pkl"
+FAISS_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{GITHUB_BRANCH}/{GITHUB_PATH}/index.faiss"
+PKL_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{GITHUB_BRANCH}/{GITHUB_PATH}/index.pkl"
 
 def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
     return api_key and len(api_key) > 20
 
 def download_vector_store():
-    """GitHub에서 벡터 저장소 다운로드"""
+    """GitHub에서 FAISS 벡터 저장소 다운로드"""
     try:
-        response = requests.get(VECTOR_DB_URL)
-        if response.status_code == 200:
-            # 임시 파일로 저장
-            with open("temp_vector.pkl", "wb") as f:
-                f.write(response.content)
-                
-            # 벡터 저장소 로드
-            with open("temp_vector.pkl", "rb") as f:
-                vectorstore = pickle.load(f)
-                
-            return True, vectorstore
-        else:
-            return False, f"다운로드 실패: {response.status_code}"
+        # FAISS 파일 다운로드
+        faiss_response = requests.get(FAISS_URL)
+        if faiss_response.status_code != 200:
+            return False, f"FAISS 파일 다운로드 실패: {faiss_response.status_code}"
+
+        # PKL 파일 다운로드
+        pkl_response = requests.get(PKL_URL)
+        if pkl_response.status_code != 200:
+            return False, f"PKL 파일 다운로드 실패: {pkl_response.status_code}"
+
+        # 임시 파일로 저장
+        with open("index.faiss", "wb") as f:
+            f.write(faiss_response.content)
+        with open("index.pkl", "wb") as f:
+            f.write(pkl_response.content)
+
+        # 임베딩 초기화
+        embeddings = HuggingFaceEmbeddings(
+            model_name="jhgan/ko-sroberta-multitask",
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
+        )
+
+        # FAISS 벡터 저장소 로드
+        vectorstore = FAISS.load_local(".", embeddings)
+        return True, vectorstore
+
     except Exception as e:
+        logger.error(f"벡터 저장소 다운로드 오류: {e}")
         return False, str(e)
 
 def get_conversation_chain(vectorstore, openai_api_key):
