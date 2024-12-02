@@ -26,15 +26,15 @@ logger = logging.getLogger(__name__)
 # 벡터 저장소 경로
 VECTOR_PATH = "vectorstore"
 
-def autoplay_audio(audio_content):
-    """음성 자동 재생을 위한 HTML 컴포넌트 생성"""
+def autoplay_audio(audio_content, autoplay=True):
+    """음성 재생을 위한 HTML 컴포넌트 생성"""
     b64 = base64.b64encode(audio_content).decode()
     md = f"""
-        <audio autoplay>
-        <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+        <audio {' autoplay' if autoplay else ''} controls>
+            <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
         </audio>
         """
-    st.markdown(md, unsafe_allow_html=True)
+    return st.markdown(md, unsafe_allow_html=True)
 
 def text_to_speech(text, lang='ko'):
     """텍스트를 음성으로 변환"""
@@ -80,7 +80,7 @@ def download_github_file(file_url):
         logger.error(f"파일 다운로드 실패: {e}")
         return None
 
-def process_github_files(repo_path="Dawol2205/chatbot_test", folder_path="foodDB"):
+def process_github_files(repo_path="Dawol2205/chatbot_test", folder_path="food_DB"):
     """GitHub 저장소에서 JSON 파일들을 처리하는 함수"""
     success, files = fetch_github_files(repo_path, folder_path)
     if not success:
@@ -118,7 +118,11 @@ def initialize_session_state():
         st.session_state.conversation = None
     if "messages" not in st.session_state:
         st.session_state.messages = [
-            {"role": "assistant", "content": "안녕하세요! 요리 도우미입니다. 어떤 요리에 대해 알고 싶으신가요?"}
+            {
+                "role": "assistant", 
+                "content": "안녕하세요! 요리 도우미입니다. 어떤 요리에 대해 알고 싶으신가요?",
+                "audio": None
+            }
         ]
     if "vectorstore" not in st.session_state:
         st.session_state.vectorstore = None
@@ -132,8 +136,6 @@ def initialize_session_state():
 """
     if "voice_enabled" not in st.session_state:
         st.session_state.voice_enabled = True
-    if "last_audio" not in st.session_state:
-        st.session_state.last_audio = None
 
 def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
@@ -334,22 +336,33 @@ def main():
                 st.error(f"저장 중 오류 발생: {str(e)}")
                 logger.error(f"저장 오류: {e}")
 
-        #  채팅 인터페이스
+        # 채팅 인터페이스
         chat_container = st.container()
         with chat_container:
             for i, message in enumerate(st.session_state.messages):
                 with st.chat_message(message["role"]):
                     st.write(message["content"])
-                    # 어시스턴트 메시지에 대해 재생 버튼 추가
+                    # 어시스턴트 메시지에 대해 음성 컨트롤 추가
                     if message["role"] == "assistant" and st.session_state.voice_enabled:
-                        # 각 메시지의 고유 인덱스를 키값으로 사용
-                        if st.button("🔊 다시 듣기", key=f"replay_message_{i}"):
-                            if st.session_state.last_audio:
-                                autoplay_audio(st.session_state.last_audio)
+                        if message.get("audio") is None and message["content"]:
+                            # 음성이 아직 생성되지 않은 경우 생성
+                            audio_bytes = text_to_speech(message["content"])
+                            if audio_bytes:
+                                message["audio"] = audio_bytes
+
+                        if message.get("audio"):
+                            # 음성 컨트롤 표시
+                            cols = st.columns([1, 4])
+                            with cols[0]:
+                                if st.button("🔊 재생", key=f"play_message_{i}"):
+                                    autoplay_audio(message["audio"])
+                            with cols[1]:
+                                # 오디오 플레이어 표시 (컨트롤 포함)
+                                autoplay_audio(message["audio"], autoplay=False)
 
         # 사용자 입력 처리
         if query := st.chat_input("질문을 입력하세요"):
-            st.session_state.messages.append({"role": "user", "content": query})
+            st.session_state.messages.append({"role": "user", "content": query, "audio": None})
             
             with st.chat_message("user"):
                 st.write(query)
@@ -357,16 +370,20 @@ def main():
             if not st.session_state.conversation:
                 response = "죄송합니다. 먼저 JSON 파일을 업로드하고 처리하거나 저장된 벡터를 불러와주세요."
                 st.warning(response)
-                st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": response
-                })
                 
                 if st.session_state.voice_enabled:
                     audio_bytes = text_to_speech(response)
-                    if audio_bytes:
-                        autoplay_audio(audio_bytes)
-                        st.session_state.last_audio = audio_bytes
+                else:
+                    audio_bytes = None
+                    
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": response,
+                    "audio": audio_bytes
+                })
+                
+                if audio_bytes:
+                    autoplay_audio(audio_bytes)
                 
                 st.stop()
 
@@ -384,7 +401,8 @@ def main():
                             audio_bytes = text_to_speech(response)
                             if audio_bytes:
                                 autoplay_audio(audio_bytes)
-                                st.session_state.last_audio = audio_bytes  # 마지막 오디오 저장
+                        else:
+                            audio_bytes = None
 
                         if source_documents:
                             with st.expander("참고 문서"):
@@ -392,22 +410,30 @@ def main():
                                     st.markdown(f"**참고 {i}:** {doc.metadata.get('source', '알 수 없는 출처')}")
                                     st.markdown(f"```\n{doc.page_content[:200]}...\n```")
 
-                        st.session_state.messages.append({"role": "assistant", "content": response})
+                        st.session_state.messages.append({
+                            "role": "assistant", 
+                            "content": response,
+                            "audio": audio_bytes
+                        })
 
                     except Exception as e:
                         error_message = f"답변 생성 중 오류가 발생했습니다: {str(e)}"
                         st.error(error_message)
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": error_message
-                        })
                         
                         if st.session_state.voice_enabled:
                             audio_bytes = text_to_speech(error_message)
-                            if audio_bytes:
-                                autoplay_audio(audio_bytes)
-                                st.session_state.last_audio = audio_bytes
-                                
+                        else:
+                            audio_bytes = None
+                            
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": error_message,
+                            "audio": audio_bytes
+                        })
+                        
+                        if audio_bytes:
+                            autoplay_audio(audio_bytes)
+                            
                         logger.error(f"응답 생성 오류: {e}")
 
     except Exception as e:
