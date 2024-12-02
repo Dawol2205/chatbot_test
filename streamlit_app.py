@@ -180,7 +180,7 @@ def main():
                     try:
                         # food_DB 폴더에서 벡터스토어 직접 로드
                         if not st.session_state.conversation:
-                            vectorstore_path = "food_DB/vectorstore.pkl"
+                            vectorstore_path = "food_DB/index.pkl"
                             if os.path.exists(vectorstore_path):
                                 with open(vectorstore_path, 'rb') as f:
                                     vectorstore = pickle.load(f)
