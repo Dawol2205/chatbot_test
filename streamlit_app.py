@@ -114,14 +114,10 @@ def main():
 
         st.title("요리 도우미 🍳")
 
-        # 음성 출력 토글 및 API 키 입력을 헤더 아래에 배치
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            st.session_state.voice_enabled = st.toggle("음성 출력 활성화", value=st.session_state.voice_enabled)
-        with col2:
-            openai_api_key = st.text_input("OpenAI API Key", type="password")
-            if not openai_api_key:
-                st.info("OpenAI API 키를 입력해주세요.", icon="🔑")
+        # API 키 입력
+        openai_api_key = st.text_input("OpenAI API Key", type="password")
+        if not openai_api_key:
+            st.info("OpenAI API 키를 입력해주세요.", icon="🔑")
 
         # 채팅 인터페이스
         chat_container = st.container()
@@ -143,8 +139,16 @@ def main():
                             with cols[1]:
                                 autoplay_audio(message["audio"], autoplay=False)
 
-        # 사용자 입력 처리
-        if query := st.chat_input("질문을 입력하세요"):
+        # 입력 영역을 컬럼으로 나누어 배치
+        input_col1, input_col2 = st.columns([4, 1])
+        
+        with input_col1:
+            query = st.chat_input("질문을 입력하세요")
+        
+        with input_col2:
+            st.session_state.voice_enabled = st.toggle("음성 출력", value=st.session_state.voice_enabled)
+
+        if query:
             st.session_state.messages.append({"role": "user", "content": query, "audio": None})
             
             with st.chat_message("user"):
