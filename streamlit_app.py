@@ -80,7 +80,7 @@ def download_github_file(file_url):
         logger.error(f"파일 다운로드 실패: {e}")
         return None
 
-def process_github_files(repo_path="Dawol2205/chatbot_test", folder_path="food_DB"):
+def process_github_files(repo_path="Dawol2205/chatbot_test", folder_path="foodDB"):
     """GitHub 저장소에서 JSON 파일들을 처리하는 함수"""
     success, files = fetch_github_files(repo_path, folder_path)
     if not success:
@@ -334,15 +334,16 @@ def main():
                 st.error(f"저장 중 오류 발생: {str(e)}")
                 logger.error(f"저장 오류: {e}")
 
-        # 채팅 인터페이스
+        #  채팅 인터페이스
         chat_container = st.container()
         with chat_container:
-            for message in st.session_state.messages:
+            for i, message in enumerate(st.session_state.messages):
                 with st.chat_message(message["role"]):
                     st.write(message["content"])
                     # 어시스턴트 메시지에 대해 재생 버튼 추가
                     if message["role"] == "assistant" and st.session_state.voice_enabled:
-                        if st.button("🔊 다시 듣기", key=f"replay_{len(st.session_state.messages)}"):
+                        # 각 메시지의 고유 인덱스를 키값으로 사용
+                        if st.button("🔊 다시 듣기", key=f"replay_message_{i}"):
                             if st.session_state.last_audio:
                                 autoplay_audio(st.session_state.last_audio)
 
