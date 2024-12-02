@@ -1,19 +1,6 @@
-# 💬 Chatbot template
+# 💬 요리 도우미 챗봇
 
-A simple Streamlit app that shows how to build a chatbot using OpenAI's GPT-3.5.
-
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://chatbot-template.streamlit.app/)
-
-### How to run it on your own machine
-
-1. Install the requirements
-
-   ```
-   $ pip install -r requirements.txt
-   ```
-
-2. Run the app
-
-   ```
-   $ streamlit run streamlit_app.py
-   ```
+1. 사이드바에서 API키입력, json파일 업로드, 벡터DB저장 및 업로드, 프롬포트작성
+2. GPT4o-mini 를 활용하여 학습된 데이터에 의해 답변
+3. 그 외의 기능은 조금 힘들었다. (구매페이지, 남은용량 체크)
+4. 
