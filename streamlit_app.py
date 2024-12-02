@@ -30,7 +30,7 @@ def autoplay_audio(audio_content, autoplay=True):
     """음성 재생을 위한 HTML 컴포넌트 생성"""
     b64 = base64.b64encode(audio_content).decode()
     md = f"""
-        <audio {' autoplay' if autoplay else ''} controls playbackRate="1.5">
+        <audio {' autoplay' if autoplay else ''} controls>
             <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
         </audio>
         """
