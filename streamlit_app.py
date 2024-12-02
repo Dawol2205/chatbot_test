@@ -9,13 +9,13 @@ import base64
 import tempfile
 import requests
 
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.chains.conversational_retrieval.base import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
-from langchain.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings.huggingface import HuggingFaceEmbeddings
-from langchain.document_loaders import PyPDFLoader
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain.docstore.document import Document
 from langchain.prompts import PromptTemplate
 
 # 로깅 설정
@@ -52,13 +52,12 @@ def initialize_session_state():
 def autoplay_audio(audio_content, autoplay=True):
     """음성 자동 재생을 위한 HTML 컴포넌트 생성"""
     b64 = base64.b64encode(audio_content).decode()
-    autoplay_attr = 'autoplay' if autoplay else ''
     md = f"""
-        <audio controls {autoplay_attr}>
+        <audio {' autoplay' if autoplay else ''} controls>
             <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
         </audio>
         """
-    st.markdown(md, unsafe_allow_html=True)
+    return st.markdown(md, unsafe_allow_html=True)
 
 def text_to_speech(text, lang='ko'):
     """텍스트를 음성으로 변환"""
@@ -66,10 +65,10 @@ def text_to_speech(text, lang='ko'):
         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
             tts = gTTS(text=text, lang=lang)
             tts.save(fp.name)
-        with open(fp.name, 'rb') as audio_file:
-            audio_bytes = audio_file.read()
-        os.remove(fp.name)
-        return audio_bytes
+            with open(fp.name, 'rb') as audio_file:
+                audio_bytes = audio_file.read()
+            os.unlink(fp.name)
+            return audio_bytes
     except Exception as e:
         logger.error(f"음성 변환 오류: {e}")
         return None
@@ -244,7 +243,7 @@ def main():
         # 채팅 인터페이스
         chat_container = st.container()
         with chat_container:
-            for message in st.session_state.messages:
+            for i, message in enumerate(st.session_state.messages):
                 with st.chat_message(message["role"]):
                     st.write(message["content"])
                     # 어시스턴트 메시지에 대해 음성 컨트롤 추가
@@ -259,7 +258,7 @@ def main():
                             # 음성 컨트롤 표시
                             cols = st.columns([1, 4])
                             with cols[0]:
-                                if st.button("🔊 재생", key=f"play_message_{message['content']}"):
+                                if st.button("🔊 재생", key=f"play_message_{i}"):
                                     autoplay_audio(message["audio"])
                             with cols[1]:
                                 # 오디오 플레이어 표시 (컨트롤 포함)
@@ -305,9 +304,7 @@ def main():
                         if st.session_state.voice_enabled:
                             audio_bytes = text_to_speech(response)
                             if audio_bytes:
-                                message = st.session_state.messages[-1]
-                                message["audio"] = audio_bytes
-                                autoplay_audio(audio_bytes, autoplay=False)
+                                autoplay_audio(audio_bytes)
                         else:
                             audio_bytes = None
 
@@ -340,7 +337,27 @@ def main():
                         
                         if audio_bytes:
                             autoplay_audio(audio_bytes)
+                            
+                        logger.error(f"응답 생성 오류: {e}")
+####
+                    except Exception as e:
+                        error_message = f"답변 생성 중 오류가 발생했습니다: {str(e)}"
+                        st.error(error_message)
                         
+                        if st.session_state.voice_enabled:
+                            audio_bytes = text_to_speech(error_message)
+                        else:
+                            audio_bytes = None
+                            
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": error_message,
+                            "audio": audio_bytes
+                        })
+                        
+                        if audio_bytes:
+                            autoplay_audio(audio_bytes)
+                            
                         logger.error(f"응답 생성 오류: {e}")
 
     except Exception as e:
