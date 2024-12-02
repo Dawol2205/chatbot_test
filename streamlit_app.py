@@ -10,9 +10,6 @@ import tempfile
 import requests
 from urllib.parse import urljoin
 
-from pydub import AudioSegment
-import io
-
 from langchain_openai import ChatOpenAI
 from langchain.chains.conversational_retrieval.base import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
@@ -40,30 +37,15 @@ def autoplay_audio(audio_content, autoplay=True):
     return st.markdown(md, unsafe_allow_html=True)
 
 def text_to_speech(text, lang='ko'):
-    """텍스트를 음성으로 변환하고 속도를 1.5배로 조정"""
+    """텍스트를 음성으로 변환"""
     try:
-        # gTTS를 사용하여 음성 생성
-        tts = gTTS(text=text, lang=lang)
-        # 임시 파일 대신 BytesIO 버퍼 사용
-        audio_fp = io.BytesIO()
-        tts.write_to_fp(audio_fp)
-        audio_fp.seek(0)
-
-        # pydub을 사용하여 오디오 로드
-        audio = AudioSegment.from_file(audio_fp, format="mp3")
-
-        # 오디오 속도를 1.5배로 증가
-        faster_audio = audio.speedup(playback_speed=1.5)
-
-        # 수정된 오디오를 BytesIO 버퍼에导出
-        output_fp = io.BytesIO()
-        faster_audio.export(output_fp, format="mp3")
-        output_fp.seek(0)
-
-        # 버퍼에서 바이트 읽기
-        audio_bytes = output_fp.read()
-        return audio_bytes
-
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
+            tts = gTTS(text=text, lang=lang)
+            tts.save(fp.name)
+            with open(fp.name, 'rb') as audio_file:
+                audio_bytes = audio_file.read()
+            os.unlink(fp.name)
+            return audio_bytes
     except Exception as e:
         logger.error(f"음성 변환 오류: {e}")
         return None
