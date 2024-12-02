@@ -8,7 +8,6 @@ from gtts import gTTS
 import base64
 import tempfile
 import requests
-from urllib.parse import urljoin
 
 from langchain_openai import ChatOpenAI
 from langchain.chains.conversational_retrieval.base import ConversationalRetrievalChain
@@ -74,107 +73,33 @@ def text_to_speech(text, lang='ko'):
         logger.error(f"음성 변환 오류: {e}")
         return None
 
-def fetch_github_files(repo_path, folder_path, github_token=None):
-    """GitHub 저장소에서 파일 목록을 가져오는 함수"""
+def process_github_files(repo_path="Dawol2205/chatbot_test", folder_path="food_DB"):
+    """GitHub 저장소에서 JSON 파일들을 처리하는 함수"""
     try:
-        api_url = f"https://api.github.com/repos/{repo_path}/contents/{folder_path}"
-        headers = {}
-        if github_token:
-            headers["Authorization"] = f"token {github_token}"
-            
-        response = requests.get(api_url, headers=headers)
-        response.raise_for_status()
-        
-        files = []
-        for item in response.json():
-            if item['type'] == 'file' and item['name'].endswith('.json'):
-                files.append({
-                    'name': item['name'],
-                    'download_url': item['download_url']
-                })
-        return True, files
-    except Exception as e:
-        logger.error(f"GitHub 파일 목록 가져오기 실패: {e}")
-        return False, str(e)
-
-def download_github_file(file_url):
-    """GitHub에서 파일을 다운로드하는 함수"""
-    try:
-        response = requests.get(file_url)
-        response.raise_for_status()
-        return response.content
-    except Exception as e:
-        logger.error(f"파일 다운로드 실패: {e}")
-        return None
-
-def commit_to_github(vectorstore, repo_path, folder_path, github_token, commit_message=None):
-    """벡터 저장소를 GitHub에 커밋"""
-    try:
-        # 임시 파일에 벡터 저장소 저장
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pkl') as temp_file:
-            pickle.dump(vectorstore, temp_file)
-            temp_path = temp_file.name
-
         # GitHub API URL
         api_url = f"https://api.github.com/repos/{repo_path}/contents/{folder_path}"
-        headers = {
-            "Authorization": f"token {github_token}",
-            "Accept": "application/vnd.github.v3+json"
-        }
-
-        # 파일 읽기
-        with open(temp_path, 'rb') as f:
-            content = f.read()
-        
-        # 임시 파일 삭제
-        os.unlink(temp_path)
-        
-        # Base64로 인코딩
-        content_b64 = base64.b64encode(content).decode()
-        
-        # 파일 이름은 항상 동일하게 유지 (버전 관리를 위해)
-        file_name = "vectorstore_latest.pkl"
-        
-        # 커밋 메시지 설정
-        if not commit_message:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            commit_message = f"Update vector store at {timestamp}"
-        
-        # GitHub API 요청 데이터
-        data = {
-            "message": commit_message,
-            "content": content_b64,
-            "branch": "main"
-        }
-
-        # 기존 파일 확인
-        check_response = requests.get(f"{api_url}/{file_name}", headers=headers)
-        if check_response.status_code == 200:
-            # 기존 파일이 있으면 sha 포함
-            data["sha"] = check_response.json()["sha"]
-
-        # 파일 업로드
-        response = requests.put(f"{api_url}/{file_name}", headers=headers, json=data)
+        response = requests.get(api_url)
         response.raise_for_status()
         
-        return True, f"Successfully committed to GitHub: {commit_message}"
-    except Exception as e:
-        logger.error(f"GitHub 커밋 오류: {e}")
-        return False, str(e)
+        # JSON 파일 필터링
+        files = [
+            item for item in response.json() 
+            if item['type'] == 'file' and item['name'].endswith('.json')
+        ]
+        
+        if not files:
+            return False, "JSON 파일을 찾을 수 없습니다."
 
-def process_github_files(repo_path="Dawol2205/chatbot_test", folder_path="food_DB", github_token=None):
-    """GitHub 저장소에서 JSON 파일들을 처리하는 함수"""
-    success, files = fetch_github_files(repo_path, folder_path, github_token)
-    if not success:
-        return False, f"파일 목록 가져오기 실패: {files}"
-
-    documents = []
-    for file in files:
-        try:
-            content = download_github_file(file['download_url'])
-            if content:
+        # 파일 내용 처리
+        documents = []
+        for file in files:
+            try:
+                # 파일 다운로드
+                content_response = requests.get(file['download_url'])
+                content_response.raise_for_status()
+                
                 # JSON 파싱
-                data = json.loads(content)
+                data = json.loads(content_response.content)
                 
                 # Document 객체 생성
                 doc = Document(
@@ -183,14 +108,18 @@ def process_github_files(repo_path="Dawol2205/chatbot_test", folder_path="food_D
                 )
                 documents.append(doc)
                 
-        except Exception as e:
-            logger.error(f"파일 처리 실패 ({file['name']}): {e}")
-            continue
+            except Exception as e:
+                logger.error(f"파일 처리 실패 ({file['name']}): {e}")
+                continue
 
-    if not documents:
-        return False, "처리된 문서가 없습니다."
-    
-    return True, documents
+        if not documents:
+            return False, "처리된 문서가 없습니다."
+        
+        return True, documents
+        
+    except Exception as e:
+        logger.error(f"GitHub 파일 처리 실패: {e}")
+        return False, str(e)
 
 def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
@@ -211,7 +140,7 @@ def create_vector_store(documents):
             model_name="jhgan/ko-sroberta-multitask",
             model_kwargs={'device': 'cpu'},
             encode_kwargs={'normalize_embeddings': True},
-            cache_folder="./models"  # 모델 캐시 위치 지정
+            cache_folder="./models"
         )
         
         return FAISS.from_documents(documents=documents, embedding=embeddings)
@@ -272,9 +201,6 @@ def main():
             if not openai_api_key:
                 st.info("OpenAI API 키를 입력해주세요.", icon="🔑")
 
-            # GitHub 토큰 입력
-            github_token = st.text_input("GitHub Token", type="password", help="GitHub Personal Access Token을 입력하세요")
-
             # 프롬프트 템플릿 설정
             st.header("프롬프트 템플릿")
             custom_prompt = st.text_area("RAG 프롬프트", value=st.session_state.custom_prompt)
@@ -282,15 +208,15 @@ def main():
                 st.session_state.custom_prompt = custom_prompt
 
             # GitHub 파일 처리 섹션
-            st.header("GitHub 파일 처리")
-            if st.button("GitHub에서 파일 가져오기"):
+            st.header("데이터 로드")
+            if st.button("요리 데이터 가져오기"):
                 if not validate_api_key(openai_api_key):
                     st.error("유효한 OpenAI API 키를 입력해주세요.")
                     st.stop()
 
                 try:
-                    with st.spinner("GitHub에서 파일을 처리하는 중..."):
-                        success, result = process_github_files(github_token=github_token)
+                    with st.spinner("데이터를 처리하는 중..."):
+                        success, result = process_github_files()
                         
                         if success:
                             # 문서 청크 생성
@@ -306,87 +232,15 @@ def main():
                                 openai_api_key,
                                 st.session_state.custom_prompt
                             )
-                            st.success("GitHub 파일 처리 완료!")
+                            st.success("데이터 로드 완료!")
                         else:
-                            st.error(f"GitHub 파일 처리 실패: {result}")
+                            st.error(f"데이터 처리 실패: {result}")
 
                 except Exception as e:
-                    st.error(f"파일 처리 중 오류 발생: {str(e)}")
+                    st.error(f"처리 중 오류 발생: {str(e)}")
                     logger.error(f"처리 오류: {e}")
 
-            # 벡터 데이터 관리 섹션
-            st.header("벡터 데이터 관리")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                # 커밋 섹션
-                commit_message = st.text_area("커밋 메시지", placeholder="변경사항에 대한 설명을 입력하세요", help="비워두면 자동으로 타임스탬프가 포함된 메시지가 생성됩니다")
-                
-                # GitHub 커밋 버튼
-                if st.button("GitHub에 커밋"):
-                    if not st.session_state.vectorstore:
-                        st.error("커밋할 벡터 데이터가 없습니다.")
-                        st.stop()
-
-                    if not github_token:
-                        st.error("GitHub Token을 입력해주세요.")
-                        st.stop()
-
-                    try:
-                        with st.spinner("GitHub에 커밋하는 중..."):
-                            success, result = commit_to_github(
-                                st.session_state.vectorstore,
-                                "Dawol2205/chatbot_test",
-                                "vector_store",
-                                github_token,
-                                commit_message
-                            )
-                            if success:
-                                st.success(f"성공적으로 커밋되었습니다!")
-                            else:
-                                st.error(f"커밋 실패: {result}")
-                    except Exception as e:
-                        st.error(f"커밋 중 오류 발생: {str(e)}")
-                        logger.error(f"커밋 오류: {e}")
-
-            with col2:
-                # 최신 버전 불러오기
-                if github_token:
-                    if st.button("최신 버전 불러오기"):
-                        if not validate_api_key(openai_api_key):
-                            st.error("유효한 OpenAI API 키를 입력해주세요.")
-                            st.stop()
-
-                        try:
-                            with st.spinner("GitHub에서 최신 버전을 불러오는 중..."):
-                                success, temp_file_path = download_from_github(
-                                    "Dawol2205/chatbot_test",
-                                    "vector_store",
-                                    "vectorstore_latest.pkl",
-                                    github_token
-                                )
-                                
-                                if success:
-                                    with open(temp_file_path, 'rb') as f:
-                                        vectorstore = pickle.load(f)
-                                    os.unlink(temp_file_path)  # 임시 파일 삭제
-                                    
-                                    st.session_state.vectorstore = vectorstore
-                                    st.session_state.conversation = get_conversation_chain(
-                                        vectorstore, 
-                                        openai_api_key,
-                                        st.session_state.custom_prompt
-                                    )
-                                    st.success("최신 버전을 성공적으로 불러왔습니다!")
-                                else:
-                                    st.error(f"최신 버전 불러오기 실패: {temp_file_path}")
-                        except Exception as e:
-                            st.error(f"최신 버전 불러오기 중 오류 발생: {e}")
-                            logger.error(f"로드 오류: {e}")
-                else:
-                    st.info("GitHub Token을 입력하면 최신 버전을 불러올 수 있습니다.")
-
-# 채팅 인터페이스
+        # 채팅 인터페이스
         chat_container = st.container()
         with chat_container:
             for i, message in enumerate(st.session_state.messages):
@@ -410,7 +264,7 @@ def main():
                                 # 오디오 플레이어 표시 (컨트롤 포함)
                                 autoplay_audio(message["audio"], autoplay=False)
 
-        # 사용자 입력 처리
+# 사용자 입력 처리
         if query := st.chat_input("질문을 입력하세요"):
             st.session_state.messages.append({"role": "user", "content": query, "audio": None})
             
@@ -418,7 +272,7 @@ def main():
                 st.write(query)
 
             if not st.session_state.conversation:
-                response = "죄송합니다. 먼저 JSON 파일을 처리하거나 저장된 벡터를 불러와주세요."
+                response = "죄송합니다. 먼저 요리 데이터를 가져와주세요."
                 st.warning(response)
                 
                 if st.session_state.voice_enabled:
