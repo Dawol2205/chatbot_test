@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 VECTOR_PATH = "vectorstore"
 
 def autoplay_audio(audio_content, autoplay=True):
-    """음성 재생을 위한 HTML 컴포넌트 생성"""
+    """음성 자동 재생을 위한 HTML 컴포넌트 생성"""
     b64 = base64.b64encode(audio_content).decode()
     md = f"""
         <audio {' autoplay' if autoplay else ''} controls>
@@ -69,6 +69,91 @@ def fetch_github_files(repo_path, folder_path):
     except Exception as e:
         logger.error(f"GitHub 파일 목록 가져오기 실패: {e}")
         return False, str(e)
+
+def upload_to_github(file_path, repo_path, folder_path):
+    """GitHub에 파일 업로드"""
+    try:
+        # GitHub API 토큰
+        github_token = st.secrets["GITHUB_TOKEN"]
+        
+        # GitHub API URL
+        api_url = f"https://api.github.com/repos/{repo_path}/contents/{folder_path}"
+        headers = {
+            "Authorization": f"token {github_token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+
+        # 파일 읽기
+        with open(file_path, 'rb') as f:
+            content = f.read()
+        
+        # Base64로 인코딩
+        content_b64 = base64.b64encode(content).decode()
+        
+        # 파일 이름 추출
+        file_name = os.path.basename(file_path)
+        
+        # GitHub API 요청 데이터
+        data = {
+            "message": f"Add vector store file: {file_name}",
+            "content": content_b64,
+            "branch": "main"
+        }
+
+        # 기존 파일 확인
+        check_response = requests.get(f"{api_url}/{file_name}", headers=headers)
+        if check_response.status_code == 200:
+            # 기존 파일이 있으면 sha 포함
+            data["sha"] = check_response.json()["sha"]
+
+        # 파일 업로드
+        response = requests.put(f"{api_url}/{file_name}", headers=headers, json=data)
+        response.raise_for_status()
+        
+        return True, f"Vector store saved to GitHub: {file_name}"
+    except Exception as e:
+        logger.error(f"GitHub 업로드 오류: {e}")
+        return False, str(e)
+
+def download_from_github(repo_path, folder_path, file_name):
+    """GitHub에서 벡터 저장소 파일 다운로드"""
+    try:
+        # GitHub API URL
+        api_url = f"https://api.github.com/repos/{repo_path}/contents/{folder_path}/{file_name}"
+        
+        # 파일 정보 가져오기
+        response = requests.get(api_url)
+        response.raise_for_status()
+        
+        # 파일 다운로드 URL 가져오기
+        download_url = response.json()["download_url"]
+        
+        # 파일 다운로드
+        response = requests.get(download_url)
+        response.raise_for_status()
+        
+        # 임시 파일로 저장
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pkl') as temp_file:
+            temp_file.write(response.content)
+            temp_file_path = temp_file.name
+        
+        return True, temp_file_path
+    except Exception as e:
+        logger.error(f"GitHub 다운로드 오류: {e}")
+        return False, str(e)
+
+def fetch_github_vector_files(repo_path, folder_path):
+    """GitHub에서 벡터 저장소 파일 목록 가져오기"""
+    try:
+        api_url = f"https://api.github.com/repos/{repo_path}/contents/{folder_path}"
+        response = requests.get(api_url)
+        response.raise_for_status()
+        
+        files = [item["name"] for item in response.json() if item["name"].endswith('.pkl')]
+        return True, files
+    except Exception as e:
+        logger.error(f"GitHub 파일 목록 가져오기 실패: {e}")
+        return False, []
 
 def download_github_file(file_url):
     """GitHub에서 파일을 다운로드하는 함수"""
@@ -276,65 +361,77 @@ def main():
                 except Exception as e:
                     st.error(f"파일 처리 중 오류 발생: {str(e)}")
                     logger.error(f"처리 오류: {e}")
+
+            # 벡터 파일 관리 섹션
+            st.header("벡터 파일 관리")
             
-            # 벡터 파일 저장 버튼
-            save_button = st.button("벡터 저장")
+            col1, col2 = st.columns(2)
+            with col1:
+                # 로컬 저장 버튼
+                if st.button("GitHub에 저장"):
+                    if not st.session_state.vectorstore:
+                        st.error("저장할 벡터 데이터가 없습니다.")
+                        st.stop()
 
-            # 벡터 파일 로드 섹션
-            st.header("벡터 파일 불러오기")
-            vector_files = []
-            if os.path.exists(VECTOR_PATH):
-                vector_files = [f for f in os.listdir(VECTOR_PATH) if f.endswith('.pkl')]
-            
-            if vector_files:
-                selected_file = st.selectbox("저장된 벡터 파일 선택", vector_files)
-                load_button = st.button("벡터 불러오기")
-            else:
-                st.info("저장된 벡터 파일이 없습니다.")
+                    try:
+                        with st.spinner("벡터 저장소를 저장하는 중..."):
+                            success, result = save_vectorstore_local(st.session_state.vectorstore)
+                            if success:
+                                # GitHub에 업로드
+                                upload_success, upload_result = upload_to_github(
+                                    result,
+                                    "Dawol2205/chatbot_test",
+                                    "vector_store"
+                                )
+                                if upload_success:
+                                    st.success(f"벡터 저장소를 저장하고 GitHub에 업로드했습니다!")
+                                else:
+                                    st.warning(f"로컬 저장 성공, GitHub 업로드 실패: {upload_result}")
+                            else:
+                                st.error(f"저장 실패: {result}")
+                    except Exception as e:
+                        st.error(f"저장 중 오류 발생: {str(e)}")
+                        logger.error(f"저장 오류: {e}")
 
-        # 벡터 파일 불러오기
-        if vector_files and load_button and selected_file:
-            if not validate_api_key(openai_api_key):
-                st.error("유효한 OpenAI API 키를 입력해주세요.")
-                st.stop()
+            with col2:
+                # GitHub에서 벡터 파일 불러오기
+                success, vector_files = fetch_github_vector_files("Dawol2205/chatbot_test", "vector_store")
+                if success and vector_files:
+                    selected_file = st.selectbox("GitHub 벡터 파일 선택", vector_files)
+                    if st.button("GitHub에서 불러오기"):
+                        if not validate_api_key(openai_api_key):
+                            st.error("유효한 OpenAI API 키를 입력해주세요.")
+                            st.stop()
 
-            try:
-                with st.spinner("벡터 저장소를 불러오는 중..."):
-                    file_path = os.path.join(VECTOR_PATH, selected_file)
-                    success, result = load_vectorstore_local(file_path)
-                    
-                    if success:
-                        st.session_state.vectorstore = result
-                        st.session_state.conversation = get_conversation_chain(
-                            result, 
-                            openai_api_key,
-                            st.session_state.custom_prompt
-                        )
-                        st.success("벡터 저장소를 성공적으로 불러왔습니다!")
-                    else:
-                        st.error(f"벡터 저장소 불러오기 실패: {result}")
-                        
-            except Exception as e:
-                st.error(f"벡터 파일 불러오기 중 오류 발생: {e}")
-                logger.error(f"로컬 로드 오류: {e}")
-
-        # 벡터 저장소 로컬 저장
-        if save_button:
-            if not st.session_state.vectorstore:
-                st.error("저장할 벡터 데이터가 없습니다. 먼저 JSON 파일을 처리해주세요.")
-                st.stop()
-
-            try:
-                with st.spinner("벡터 저장소를 저장하는 중..."):
-                    success, result = save_vectorstore_local(st.session_state.vectorstore)
-                    if success:
-                        st.success(f"벡터 저장소를 저장했습니다! (경로: {result})")
-                    else:
-                        st.error(f"저장 실패: {result}")
-
-            except Exception as e:
-                st.error(f"저장 중 오류 발생: {str(e)}")
-                logger.error(f"저장 오류: {e}")
+                        try:
+                            with st.spinner("GitHub에서 벡터 저장소를 불러오는 중..."):
+                                success, temp_file_path = download_from_github(
+                                    "Dawol2205/chatbot_test",
+                                    "vector_store",
+                                    selected_file
+                                )
+                                
+                                if success:
+                                    success, result = load_vectorstore_local(temp_file_path)
+                                    os.unlink(temp_file_path)  # 임시 파일 삭제
+                                    
+                                    if success:
+                                        st.session_state.vectorstore = result
+                                        st.session_state.conversation = get_conversation_chain(
+                                            result, 
+                                            openai_api_key,
+                                            st.session_state.custom_prompt
+                                        )
+                                        st.success("GitHub에서 벡터 저장소를 성공적으로 불러왔습니다!")
+                                    else:
+                                        st.error(f"벡터 저장소 로드 실패: {result}")
+                                else:
+                                    st.error(f"GitHub에서 파일 다운로드 실패: {temp_file_path}")
+                        except Exception as e:
+                            st.error(f"GitHub에서 파일 불러오기 중 오류 발생: {e}")
+                            logger.error(f"GitHub 로드 오류: {e}")
+                else:
+                    st.info("GitHub에 저장된 벡터 파일이 없습니다.")
 
         # 채팅 인터페이스
         chat_container = st.container()
