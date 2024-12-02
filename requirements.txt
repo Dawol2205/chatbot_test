@@ -6,4 +6,3 @@ faiss-cpu
 sentence-transformers
 gTTS
 requests
-pydub
