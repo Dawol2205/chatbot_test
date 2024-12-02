@@ -80,7 +80,7 @@ def download_github_file(file_url):
         logger.error(f"파일 다운로드 실패: {e}")
         return None
 
-def process_github_files(repo_path="Dawol2205/chatbot_test", folder_path="foodDB"):
+def process_github_files(repo_path="Dawol2205/chatbot_test", folder_path="food_DB"):
     """GitHub 저장소에서 JSON 파일들을 처리하는 함수"""
     success, files = fetch_github_files(repo_path, folder_path)
     if not success:
