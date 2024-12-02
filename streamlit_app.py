@@ -19,16 +19,17 @@ def autoplay_audio(audio_content, autoplay=True):
     """음성 재생을 위한 HTML 컴포넌트 생성 (1.5배속)"""
     b64 = base64.b64encode(audio_content).decode()
     md = f"""
-        <audio {' autoplay' if autoplay else ''} controls>
+        <audio {' autoplay' if autoplay else ''} controls onloadedmetadata="this.playbackRate = 1.5">
             <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
         </audio>
         <script>
-            document.addEventListener('DOMContentLoaded', function() {{
-                const audioElements = document.getElementsByTagName('audio');
-                for(let audio of audioElements) {{
-                    audio.playbackRate = 1.5;
-                }}
-            }});
+            const audioElements = document.getElementsByTagName('audio');
+            for (let audio of audioElements) {{
+                audio.playbackRate = 1.5;
+                audio.onplay = function() {{
+                    this.playbackRate = 1.5;
+                }};
+            }}
         </script>
         """
     return st.markdown(md, unsafe_allow_html=True)
