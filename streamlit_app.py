@@ -80,7 +80,7 @@ def download_github_file(file_url):
         logger.error(f"파일 다운로드 실패: {e}")
         return None
 
-def process_github_files(repo_path="Dawol2205/chatbot_test", folder_path="food_DB"):
+def process_github_files(repo_path="Dawol2205/chatbot_test", folder_path="foodDB"):
     """GitHub 저장소에서 JSON 파일들을 처리하는 함수"""
     success, files = fetch_github_files(repo_path, folder_path)
     if not success:
@@ -132,6 +132,8 @@ def initialize_session_state():
 """
     if "voice_enabled" not in st.session_state:
         st.session_state.voice_enabled = True
+    if "last_audio" not in st.session_state:
+        st.session_state.last_audio = None
 
 def validate_api_key(api_key):
     """OpenAI API 키 형식 검증"""
@@ -287,7 +289,8 @@ def main():
                 load_button = st.button("벡터 불러오기")
             else:
                 st.info("저장된 벡터 파일이 없습니다.")
-# 벡터 파일 불러오기
+
+        # 벡터 파일 불러오기
         if vector_files and load_button and selected_file:
             if not validate_api_key(openai_api_key):
                 st.error("유효한 OpenAI API 키를 입력해주세요.")
@@ -337,6 +340,11 @@ def main():
             for message in st.session_state.messages:
                 with st.chat_message(message["role"]):
                     st.write(message["content"])
+                    # 어시스턴트 메시지에 대해 재생 버튼 추가
+                    if message["role"] == "assistant" and st.session_state.voice_enabled:
+                        if st.button("🔊 다시 듣기", key=f"replay_{len(st.session_state.messages)}"):
+                            if st.session_state.last_audio:
+                                autoplay_audio(st.session_state.last_audio)
 
         # 사용자 입력 처리
         if query := st.chat_input("질문을 입력하세요"):
@@ -357,6 +365,7 @@ def main():
                     audio_bytes = text_to_speech(response)
                     if audio_bytes:
                         autoplay_audio(audio_bytes)
+                        st.session_state.last_audio = audio_bytes
                 
                 st.stop()
 
@@ -374,6 +383,7 @@ def main():
                             audio_bytes = text_to_speech(response)
                             if audio_bytes:
                                 autoplay_audio(audio_bytes)
+                                st.session_state.last_audio = audio_bytes  # 마지막 오디오 저장
 
                         if source_documents:
                             with st.expander("참고 문서"):
@@ -395,6 +405,7 @@ def main():
                             audio_bytes = text_to_speech(error_message)
                             if audio_bytes:
                                 autoplay_audio(audio_bytes)
+                                st.session_state.last_audio = audio_bytes
                                 
                         logger.error(f"응답 생성 오류: {e}")
 
