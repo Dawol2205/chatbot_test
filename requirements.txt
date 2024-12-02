@@ -1,8 +1,7 @@
 streamlit
 langchain
 langchain-openai
-langchain_community
+langchain-community
+gTTS
 faiss-cpu
 sentence-transformers
-gTTS
-requests
